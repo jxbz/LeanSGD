@@ -24,7 +24,7 @@ from warnings import warn
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-09-11'
+today = '2017-09-12'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -72,11 +72,24 @@ parser.set_defaults(augment=True)
 args = parser.parse_args()
 args.use_cuda = use_cuda
 
+def _set_visible_gpus(num_gpus, verbose=True):
+    gpus = list(range(torch.cuda.device_count()))
+    devices = gpus[:num_gpus]
+    os.environ["CUDA_VISIBLE_DEVICES"] = ','.join([str(g) for g in devices])
+    if verbose:
+        print("CUDA_VISIBLE_DEVICES={}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
+    return devices
+
+
+device_ids = _set_visible_gpus(args.num_workers)
+cuda_kwargs = {'async': True}
+
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 random.seed(args.seed)
 
 best_prec1 = 0
+
 
 def _mkdir(dir):
     if not os.path.isdir(dir):
@@ -121,6 +134,7 @@ def main():
 
     kwargs = {'num_workers': args.num_workers, 'pin_memory': use_cuda}
     assert(args.dataset == 'cifar10' or args.dataset == 'cifar100')
+    print("Creating the DataLoader...")
     train_loader = torch.utils.data.DataLoader(
         datasets.__dict__[args.dataset.upper()]('../data', train=True, download=True,
                          transform=transform_train),
@@ -130,6 +144,7 @@ def main():
         batch_size=args.batch_size, shuffle=True, **kwargs)
 
     # create model
+    print("Creating the model...")
     model = WideResNet(args.layers, args.dataset == 'cifar10' and 10 or 100,
                             args.widen_factor, dropRate=args.droprate)
 
@@ -139,9 +154,11 @@ def main():
 
     # for training on multiple GPUs.
     # Use CUDA_VISIBLE_DEVICES=0,1 to specify which GPUs to use
-    # model = torch.nn.DataParallel(model).cuda()
     if use_cuda:
+        print("Moving the model to the GPU")
+        model = torch.nn.DataParallel(model, device_ids=device_ids)
         model = model.cuda()
+        #model = model.cuda()
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -164,7 +181,7 @@ def main():
     if use_cuda:
         criterion = criterion.cuda()
     #optimizer = torch.optim.SGD(model.parameters(), args.lr,
-    #                            momentum=args.momentum, nesterov = args.nesterov,
+    #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
     optimizer = torch.optim.ASGD(model.parameters(), args.lr)
 
@@ -209,10 +226,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     end = time.time()
     pbar = tqdm(enumerate(train_loader))
+    start = time.time()
     for i, (input, target) in pbar:
         if use_cuda:
-            target = target.cuda(async=True)
-            input = input.cuda()
+            target = target.cuda(**cuda_kwargs)
+            input = input.cuda(**cuda_kwargs)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
 
@@ -253,8 +271,8 @@ def validate(val_loader, model, criterion, epoch):
     end = time.time()
     pbar = tqdm(enumerate(val_loader))
     for i, (input, target) in pbar:
-        target = target.cuda(async=True)
-        input = input.cuda()
+        target = target.cuda(**cuda_kwargs)
+        input = input.cuda(**cuda_kwargs)
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
 
