@@ -1,7 +1,9 @@
+from __future__ import print_function
 import argparse
 import os
 import shutil
 import time
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -12,13 +14,26 @@ import torch.optim
 import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
+from pprint import pprint
 from torch.autograd import Variable
+import pandas as pd
+import numpy as np
+import random
+from warnings import warn
 
 from wideresnet import WideResNet
+from datetime import datetime
+today_datetime = datetime.now().isoformat()[:10]
+today = '2017-09-11'
+if today != today_datetime:
+    warn('Is today set correctly?')
+
 
 # used for logging to TensorBoard
-from tensorboard_logger import configure, log_value
+if False:
+    from tensorboard_logger import configure, log_value
 
+use_cuda = torch.cuda.is_available()
 parser = argparse.ArgumentParser(description='PyTorch WideResNet Training')
 parser.add_argument('--dataset', default='cifar10', type=str,
                     help='dataset (cifar10 [default] or cifar100)')
@@ -26,8 +41,8 @@ parser.add_argument('--epochs', default=200, type=int,
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int,
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=128, type=int,
-                    help='mini-batch size (default: 128)')
+parser.add_argument('-b', '--batch-size', default=512, type=int,
+                    help='mini-batch size (default: 512)')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
@@ -48,15 +63,34 @@ parser.add_argument('--resume', default='', type=str,
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('--name', default='WideResNet-28-10', type=str,
                     help='name of experiment')
-parser.add_argument('--tensorboard',
+parser.add_argument('--tensorboard', default=False,
                     help='Log progress to TensorBoard', action='store_true')
+parser.add_argument('--num_workers', default=1, help='Number of workers', type=int)
+parser.add_argument('--seed', default=42, help='Random seed', type=int)
+
 parser.set_defaults(augment=True)
+args = parser.parse_args()
+args.use_cuda = use_cuda
+
+torch.manual_seed(args.seed)
+np.random.seed(args.seed)
+random.seed(args.seed)
 
 best_prec1 = 0
 
+def _mkdir(dir):
+    if not os.path.isdir(dir):
+        os.mkdir(dir)
+    return True
+    
+def _write_csv(df, id=''):
+    filename = f'output/{today}/{id}.csv'
+    _mkdir('output')
+    _mkdir(f'output/{today}')
+    df.to_csv(filename)
+    return True
 def main():
-    global args, best_prec1
-    args = parser.parse_args()
+    global args, best_prec1, data
     if args.tensorboard: configure("runs/%s"%(args.name))
 
     # Data loading code
@@ -85,7 +119,7 @@ def main():
         normalize
         ])
 
-    kwargs = {'num_workers': 1, 'pin_memory': True}
+    kwargs = {'num_workers': args.num_workers, 'pin_memory': use_cuda}
     assert(args.dataset == 'cifar10' or args.dataset == 'cifar100')
     train_loader = torch.utils.data.DataLoader(
         datasets.__dict__[args.dataset.upper()]('../data', train=True, download=True,
@@ -106,7 +140,8 @@ def main():
     # for training on multiple GPUs.
     # Use CUDA_VISIBLE_DEVICES=0,1 to specify which GPUs to use
     # model = torch.nn.DataParallel(model).cuda()
-    model = model.cuda()
+    if use_cuda:
+        model = model.cuda()
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -124,19 +159,34 @@ def main():
     cudnn.benchmark = True
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda()
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum, nesterov = args.nesterov,
-                                weight_decay=args.weight_decay)
 
+    criterion = nn.CrossEntropyLoss()
+    if use_cuda:
+        criterion = criterion.cuda()
+    #optimizer = torch.optim.SGD(model.parameters(), args.lr,
+    #                            momentum=args.momentum, nesterov = args.nesterov,
+    #                            weight_decay=args.weight_decay)
+    optimizer = torch.optim.ASGD(model.parameters(), args.lr)
+
+    data = []
+    train_time = 0
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch+1)
 
         # train for one epoch
+        start = time.time()
         train(train_loader, model, criterion, optimizer, epoch)
+        train_time += time.time() - start
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, epoch)
+        datum = validate(val_loader, model, criterion, epoch)
+        data += [{'train_time': train_time,
+                  'epoch': epoch + 1, **vars(args), **datum}]
+        df = pd.DataFrame(data)
+        _write_csv(df, id=f'{args.num_workers}_{args.seed}')
+        pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
+                                                           'test_loss', 'test_acc', 'epoch']})
+        prec1 = datum['test_acc']
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -146,7 +196,7 @@ def main():
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
         }, is_best)
-    print 'Best accuracy: ', best_prec1
+    print('Best accuracy: ', best_prec1)
 
 def train(train_loader, model, criterion, optimizer, epoch):
     """Train for one epoch on the training set"""
@@ -158,9 +208,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
-    for i, (input, target) in enumerate(train_loader):
-        target = target.cuda(async=True)
-        input = input.cuda()
+    pbar = tqdm(enumerate(train_loader))
+    for i, (input, target) in pbar:
+        if use_cuda:
+            target = target.cuda(async=True)
+            input = input.cuda()
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
 
@@ -182,13 +234,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
-                      epoch, i, len(train_loader), batch_time=batch_time,
-                      loss=losses, top1=top1))
+        p = 100 * i / len(train_loader)
+        pbar.set_description(f'loss={losses.avg:.3f}, acc={top1.avg:.3f} {p:.1f}%')
     # log to TensorBoard
     if args.tensorboard:
         log_value('train_loss', losses.avg, epoch)
@@ -204,7 +251,8 @@ def validate(val_loader, model, criterion, epoch):
     model.eval()
 
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
+    pbar = tqdm(enumerate(val_loader))
+    for i, (input, target) in pbar:
         target = target.cuda(async=True)
         input = input.cuda()
         input_var = torch.autograd.Variable(input, volatile=True)
@@ -223,20 +271,16 @@ def validate(val_loader, model, criterion, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i % args.print_freq == 0:
-            print('Test: [{0}/{1}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
-                      i, len(val_loader), batch_time=batch_time, loss=losses,
-                      top1=top1))
+        p = 100 * i / len(val_loader)
+        pbar.set_description(f'loss={losses.avg:.3f}, acc={top1.avg:.3f} {p:.1f}%')
 
-    print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
+    #print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
     # log to TensorBoard
     if args.tensorboard:
         log_value('val_loss', losses.avg, epoch)
         log_value('val_acc', top1.avg, epoch)
-    return top1.avg
+    return {'test_loss': losses.avg,
+            'test_acc': top1.avg}
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
@@ -288,7 +332,7 @@ def accuracy(output, target, topk=(1,)):
     res = []
     for k in topk:
         correct_k = correct[:k].view(-1).float().sum(0)
-        res.append(correct_k.mul_(100.0 / batch_size))
+        res.append(correct_k.mul_(1 / batch_size))
     return res
 
 if __name__ == '__main__':
