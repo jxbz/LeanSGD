@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 
 class BasicBlock(nn.Module):
@@ -36,7 +37,7 @@ class NetworkBlock(nn.Module):
         self.layer = self._make_layer(block, in_planes, out_planes, nb_layers, stride, dropRate)
     def _make_layer(self, block, in_planes, out_planes, nb_layers, stride, dropRate):
         layers = []
-        for i in range(nb_layers):
+        for i in range(int(nb_layers)):
             layers.append(block(i == 0 and in_planes or out_planes, out_planes, i == 0 and stride or 1, dropRate))
         return nn.Sequential(*layers)
     def forward(self, x):
@@ -48,6 +49,8 @@ class WideResNet(nn.Module):
         nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
         assert((depth - 4) % 6 == 0)
         n = (depth - 4) / 6
+        assert np.abs(n - int(n)) < 1e-3
+        n = int(n)
         block = BasicBlock
         # 1st conv before any network block
         self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1,
