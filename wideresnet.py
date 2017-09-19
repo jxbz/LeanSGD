@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import comms
 
 
 class BasicBlock(nn.Module):
@@ -44,7 +45,8 @@ class NetworkBlock(nn.Module):
         return self.layer(x)
 
 class WideResNet(nn.Module):
-    def __init__(self, depth, num_classes, widen_factor=1, dropRate=0.0):
+    def __init__(self, depth, num_classes, widen_factor=1, dropRate=0.0,
+                 register_hook=True):
         super(WideResNet, self).__init__()
         nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
         assert((depth - 4) % 6 == 0)
@@ -76,6 +78,10 @@ class WideResNet(nn.Module):
                 m.bias.data.zero_()
             elif isinstance(m, nn.Linear):
                 m.bias.data.zero_()
+        if register_hook:
+            for name, param in self.named_parameters():
+                param.register_hook(comms.encode(name))
+
     def forward(self, x):
         out = self.conv1(x)
         out = self.block1(out)

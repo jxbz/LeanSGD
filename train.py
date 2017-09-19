@@ -17,6 +17,7 @@ import torch.nn.functional as F
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
+import optim
 import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
@@ -39,6 +40,10 @@ if today != today_datetime:
 if False:
     from tensorboard_logger import configure, log_value
 
+# changes to defaults to run on local machine:
+# layers : 28 => 10
+# widen_factor: 10 => 1
+# batch_size : 512 => 128
 use_cuda = torch.cuda.is_available()
 parser = argparse.ArgumentParser(description='PyTorch WideResNet Training')
 parser.add_argument('--dataset', default='cifar10', type=str,
@@ -47,7 +52,7 @@ parser.add_argument('--epochs', default=200, type=int,
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int,
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=512, type=int,
+parser.add_argument('-b', '--batch-size', default=128, type=int,
                     help='mini-batch size (default: 512)')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     help='initial learning rate')
@@ -57,9 +62,9 @@ parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float,
                     help='weight decay (default: 5e-4)')
 parser.add_argument('--print-freq', '-p', default=10, type=int,
                     help='print frequency (default: 10)')
-parser.add_argument('--layers', default=28, type=int,
+parser.add_argument('--layers', default=10, type=int,
                     help='total number of layers (default: 28)')
-parser.add_argument('--widen-factor', default=10, type=int,
+parser.add_argument('--widen-factor', default=1, type=int,
                     help='widen factor (default: 10)')
 parser.add_argument('--droprate', default=0, type=float,
                     help='dropout probability (default: 0.0)')
@@ -110,10 +115,6 @@ def _set_up_distributed(url='127.0.0.1', port=3243, world_size=2):
     return {'local': my_rank, 'num_processes': num_processes}
 
 print('Setting up distributed...')
-dist_info = _set_up_distributed()
-assert dist_info['num_processes'] == 2
-dist_info['remote'] = 1 - dist_info['local']
-pprint(dist_info)
 
 def _mkdir(dir):
     if not os.path.isdir(dir):
@@ -172,7 +173,8 @@ def main():
     # create model
     print("Creating the model...")
     model = WideResNet(args.layers, args.dataset == 'cifar10' and 10 or 100,
-                            args.widen_factor, dropRate=args.droprate)
+                       args.widen_factor, dropRate=args.droprate,
+                       register_hook=True)
 
     # get the number of model parameters
     print('Number of model parameters: {}'.format(
@@ -206,10 +208,16 @@ def main():
     criterion = nn.CrossEntropyLoss()
     if use_cuda:
         criterion = criterion.cuda()
+    #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
+    params = [{'params': v, 'name': k} for k, v in model.named_parameters()]
+    #  optimizer = torch.optim.ASGD(params, args.lr)
+    optimizer = optim.LowCommASGD(params, lr=args.lr)
     #optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
-    optimizer = torch.optim.ASGD(model.parameters(), args.lr)
+    #  optimizer = optim.SGD(model.parameters(), args.lr,
+                          #  momentum=args.momentum, nesterov=args.nesterov,
+                          #  weight_decay=args.weight_decay)
 
     data = []
     train_time = 0
@@ -319,13 +327,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         p = 100 * i / len(train_loader)
         pbar.set_description(f'loss={losses.avg:.3f}, acc={top1.avg:.3f} {p:.1f}%')
-
-        # send and receive
-        map_reduce(model, dist_info['remote'])
-        #  send(model)
-        #  other_params = recv(model)
-        #  for param, other_param in zip(model.parameters(), other_params):
-            #  param.data = reduce(model.parameters(), other_param)
 
     # log to TensorBoard
     if args.tensorboard:
