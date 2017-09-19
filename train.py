@@ -1,11 +1,17 @@
+"""
+Debugging run:
+python train.py --layers=10 --widen-factor=1 --epochs=2
+"""
 from __future__ import print_function
 import argparse
 import os
 import shutil
 import time
 from tqdm import tqdm
+import numpy.linalg as LA
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.parallel
@@ -24,7 +30,7 @@ from warnings import warn
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-09-12'
+today = '2017-09-14'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -80,30 +86,50 @@ def _set_visible_gpus(num_gpus, verbose=True):
         print("CUDA_VISIBLE_DEVICES={}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
     return devices
 
-
+print('Getting visibile GPUs...')
 device_ids = _set_visible_gpus(args.num_workers)
 cuda_kwargs = {'async': True}
 
+print('Setting seed...')
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 random.seed(args.seed)
 
 best_prec1 = 0
 
+# set up torch.distributed
+def _set_up_distributed(url='127.0.0.1', port=3243, world_size=2):
+    if 'RANK' not in os.environ:
+        raise ValueError('`RANK` is not in enviroment variables')
+    local_rank = int(os.environ['RANK'])
+    dist.init_process_group(backend='tcp', init_method=f'tcp://{url}:{port}',
+                            world_size=world_size, rank=local_rank)
+
+    my_rank = torch.distributed.get_rank()
+    num_processes = torch.distributed.get_world_size()
+    return {'local': my_rank, 'num_processes': num_processes}
+
+print('Setting up distributed...')
+dist_info = _set_up_distributed()
+assert dist_info['num_processes'] == 2
+dist_info['remote'] = 1 - dist_info['local']
+pprint(dist_info)
 
 def _mkdir(dir):
     if not os.path.isdir(dir):
         os.mkdir(dir)
     return True
-    
+
 def _write_csv(df, id=''):
     filename = f'output/{today}/{id}.csv'
     _mkdir('output')
     _mkdir(f'output/{today}')
     df.to_csv(filename)
     return True
+
 def main():
-    global args, best_prec1, data
+    print('Entering main...')
+    global args, best_prec1
     if args.tensorboard: configure("runs/%s"%(args.name))
 
     # Data loading code
@@ -215,6 +241,45 @@ def main():
         }, is_best)
     print('Best accuracy: ', best_prec1)
 
+
+def map_reduce(model, send_to):
+    for (name, param1), param2 in zip(model.named_parameters(), model.parameters()):
+        assert param1.size() == param2.size()
+        d = [t.cpu().data.numpy() for t in [param1, param2]]
+        assert np.allclose(*d)
+
+    data = [t.cpu().data.numpy() for t in model.parameters()]
+    data = np.array(data)
+    params = torch.Tensor(data)
+
+    send_data = params.clone()
+    dist.send(send_data, send_to)
+    recv = send_data.clone()
+    r = dist.recv(recv, send_to)
+    #  r.wait()
+
+    values = [x.numpy() for x in [recv, send_data]]
+    error = np.abs(values[0] - values[1])
+    rel_error = LA.norm(values[0] - values[1]) / LA.norm(values[0])
+
+    print("Norms =", [LA.norm(v) for v in values])
+    print("rel_error =", rel_error, "error.{mean, max} =", error.mean(), error.max())
+    #  assert rel_error < 1e-2
+    #  assert np.allclose(recv.numpy(), send_data.numpy())
+
+#  def send(model, send_to):
+    #  x = model.parameters()
+    #  for param in model.paramete
+    #  dist.send(x, send_to)
+
+
+#  def recv(model, recv_from):
+    #  other_params = [param.copy() for param in model.parameters()]
+    #  for other_param in other_params:
+        #  dist.recv(other_param, recv_from)
+    #  return other_params
+
+
 def train(train_loader, model, criterion, optimizer, epoch):
     """Train for one epoch on the training set"""
     batch_time = AverageMeter()
@@ -254,6 +319,14 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         p = 100 * i / len(train_loader)
         pbar.set_description(f'loss={losses.avg:.3f}, acc={top1.avg:.3f} {p:.1f}%')
+
+        # send and receive
+        map_reduce(model, dist_info['remote'])
+        #  send(model)
+        #  other_params = recv(model)
+        #  for param, other_param in zip(model.parameters(), other_params):
+            #  param.data = reduce(model.parameters(), other_param)
+
     # log to TensorBoard
     if args.tensorboard:
         log_value('train_loss', losses.avg, epoch)
