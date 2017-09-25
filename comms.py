@@ -47,6 +47,7 @@ def encode(name=None):
 
         storage[name] = storage.get(name, {})
         grad = grad.data
+        storage[name]['original_grad'] = grad
         storage[name]['size'] = grad.size()
         size = grad.size()
 
@@ -63,6 +64,7 @@ def encode(name=None):
             if take_svd:
                 storage[name]['encode'] = True
                 (u, s, v) = torch.svd(grad)
+                print([tuple(x.size()) for x in [u, s, v]])
                 storage[name]['svd'] = {'u': u, 's': s, 'v': v}
         else:
             storage[name]['grad'] += grad
@@ -87,12 +89,15 @@ def decode(name, verbose=False):
 
     u, s, v = [storage[name]['svd'][k] for k in ['u', 's', 'v']]
     grad = storage[name]['grad']
+    orig_grad = storage[name]['original_grad']
     grad_approx = u @ torch.diag(s) @ v.t()
 
     if storage[name].get('reshaped', False):
         grad_approx = grad_approx.view(storage[name]['size'])
 
     rel_error = torch.norm(grad_approx - grad) / torch.norm(grad)
+    rel_error = torch.norm(grad_approx - orig_grad) / torch.norm(orig_grad)
+    print(rel_error)  # prints on order of 1e-7
     del storage[name]['svd']
     del storage[name]['grad']
     return grad_approx
