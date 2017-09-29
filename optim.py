@@ -50,7 +50,11 @@ class LowCommASGD(optim.ASGD):
 
                 #  grad = p.grad.data
                 grad = comms.decode(group['name'])
+                if grad is None:
+                    continue
                 state = self.state[p]
+                #  print([type(x) for x in [grad, p.data]])
+                #  print([x.size() for x in [grad, p.data]])
 
                 # State initialization
                 if len(state) == 0:

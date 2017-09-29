@@ -31,7 +31,7 @@ from warnings import warn
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-09-14'
+today = '2017-09-26'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -45,6 +45,7 @@ if False:
 # widen_factor: 10 => 1
 # batch_size : 512 => 128
 use_cuda = torch.cuda.is_available()
+#  use_cuda = False
 parser = argparse.ArgumentParser(description='PyTorch WideResNet Training')
 parser.add_argument('--dataset', default='cifar10', type=str,
                     help='dataset (cifar10 [default] or cifar100)')
@@ -78,10 +79,18 @@ parser.add_argument('--tensorboard', default=False,
                     help='Log progress to TensorBoard', action='store_true')
 parser.add_argument('--num_workers', default=1, help='Number of workers', type=int)
 parser.add_argument('--seed', default=42, help='Random seed', type=int)
+parser.add_argument('--approx_grad', default=1,
+                    help='Use SVD to approx grad', type=int)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
 args.use_cuda = use_cuda
+args.approx_grad = bool(args.approx_grad)
+
+print("\n")
+print("approx_grad =", args.approx_grad)
+print("use_cuda =", args.use_cuda)
+print("\n")
 
 def _set_visible_gpus(num_gpus, verbose=True):
     gpus = list(range(torch.cuda.device_count()))
@@ -174,7 +183,7 @@ def main():
     print("Creating the model...")
     model = WideResNet(args.layers, args.dataset == 'cifar10' and 10 or 100,
                        args.widen_factor, dropRate=args.droprate,
-                       register_hook=True)
+                       register_hook=args.approx_grad)
 
     # get the number of model parameters
     print('Number of model parameters: {}'.format(
@@ -208,10 +217,18 @@ def main():
     criterion = nn.CrossEntropyLoss()
     if use_cuda:
         criterion = criterion.cuda()
-    #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
-    params = [{'params': v, 'name': k} for k, v in model.named_parameters()]
-    #  optimizer = torch.optim.ASGD(params, args.lr)
-    optimizer = optim.LowCommASGD(params, lr=args.lr)
+    print("approx_grad =", args.approx_grad)
+    if args.approx_grad:
+        import comms
+        print('optimizer = optim.LowCommASGD')
+        params = [{'params': v, 'name': k} for k, v in model.named_parameters()]
+        for name, param in model.named_parameters():
+            param.register_hook(comms.encode(name))
+        optimizer = optim.LowCommASGD(params, lr=args.lr)
+    else:
+        print('optimizer = torch.optim.ASGD')
+        params = model.parameters()
+        optimizer = torch.optim.ASGD(params, args.lr)
     #optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
@@ -234,7 +251,10 @@ def main():
         data += [{'train_time': train_time,
                   'epoch': epoch + 1, **vars(args), **datum}]
         df = pd.DataFrame(data)
-        _write_csv(df, id=f'{args.num_workers}_{args.seed}')
+        filename = '_'.join([str(getattr(args, key))
+                             for key in ['num_workers', 'seed', 'layers',
+                                         'approx_grad', 'epochs']])
+        _write_csv(df, id=filename + '.csv')
         pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
                                                            'test_loss', 'test_acc', 'epoch']})
         prec1 = datum['test_acc']
@@ -274,18 +294,6 @@ def map_reduce(model, send_to):
     print("rel_error =", rel_error, "error.{mean, max} =", error.mean(), error.max())
     #  assert rel_error < 1e-2
     #  assert np.allclose(recv.numpy(), send_data.numpy())
-
-#  def send(model, send_to):
-    #  x = model.parameters()
-    #  for param in model.paramete
-    #  dist.send(x, send_to)
-
-
-#  def recv(model, recv_from):
-    #  other_params = [param.copy() for param in model.parameters()]
-    #  for other_param in other_params:
-        #  dist.recv(other_param, recv_from)
-    #  return other_params
 
 
 def train(train_loader, model, criterion, optimizer, epoch):

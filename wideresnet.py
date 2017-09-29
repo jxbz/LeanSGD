@@ -78,9 +78,10 @@ class WideResNet(nn.Module):
                 m.bias.data.zero_()
             elif isinstance(m, nn.Linear):
                 m.bias.data.zero_()
-        if register_hook:
-            for name, param in self.named_parameters():
-                param.register_hook(comms.encode(name))
+        #  if register_hook:
+            #  print("Registering hook for gradient computation...")
+            #  for name, param in self.named_parameters():
+                #  param.register_hook(comms.encode(name))
 
     def forward(self, x):
         out = self.conv1(x)
