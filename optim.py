@@ -37,7 +37,11 @@ class LowCommSGD(optim.SGD):
 
         return loss
 
-class LowCommASGD(optim.ASGD):
+class CommASGD(optim.ASGD):
+    def __init__(self, *args, compress=True, **kwargs):
+        super(CommASGD, self).__init__(*args, **kwargs)
+        self.compress = compress
+
     def step(self, closure=None):
         loss = None
         if closure is not None:
@@ -49,7 +53,7 @@ class LowCommASGD(optim.ASGD):
                     continue
 
                 #  grad = p.grad.data
-                grad = comms.decode(group['name'])
+                grad, meta = comms.decode(group['name'], compress=self.compress)
                 if grad is None:
                     continue
                 state = self.state[p]
@@ -86,4 +90,4 @@ class LowCommASGD(optim.ASGD):
                                           state['step']), group['alpha']))
                 state['mu'] = 1 / max(1, state['step'] - group['t0'])
 
-        return loss
+        return loss, meta

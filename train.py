@@ -27,11 +27,12 @@ import pandas as pd
 import numpy as np
 import random
 from warnings import warn
+import comms
 
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-09-26'
+today = '2017-10-05'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -79,8 +80,10 @@ parser.add_argument('--tensorboard', default=False,
                     help='Log progress to TensorBoard', action='store_true')
 parser.add_argument('--num_workers', default=1, help='Number of workers', type=int)
 parser.add_argument('--seed', default=42, help='Random seed', type=int)
-parser.add_argument('--approx_grad', default=1,
+parser.add_argument('--approx_grad', default=0,
                     help='Use SVD to approx grad', type=int)
+parser.add_argument('--svd_rank', default=0,
+                    help='With what rank should we approx the grad?', type=int)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
@@ -182,8 +185,7 @@ def main():
     # create model
     print("Creating the model...")
     model = WideResNet(args.layers, args.dataset == 'cifar10' and 10 or 100,
-                       args.widen_factor, dropRate=args.droprate,
-                       register_hook=args.approx_grad)
+                       args.widen_factor, dropRate=args.droprate)
 
     # get the number of model parameters
     print('Number of model parameters: {}'.format(
@@ -218,17 +220,12 @@ def main():
     if use_cuda:
         criterion = criterion.cuda()
     print("approx_grad =", args.approx_grad)
-    if args.approx_grad:
-        import comms
-        print('optimizer = optim.LowCommASGD')
-        params = [{'params': v, 'name': k} for k, v in model.named_parameters()]
-        for name, param in model.named_parameters():
-            param.register_hook(comms.encode(name))
-        optimizer = optim.LowCommASGD(params, lr=args.lr)
-    else:
-        print('optimizer = torch.optim.ASGD')
-        params = model.parameters()
-        optimizer = torch.optim.ASGD(params, args.lr)
+    params = [{'params': v, 'name': k} for k, v in model.named_parameters()]
+    for name, param in model.named_parameters():
+        param.register_hook(comms.encode(name, compress=args.approx_grad,
+                                         rank=args.svd_rank))
+    #  optimizer = optim.CommASGD(params, lr=args.lr, compress=args.approx_grad)
+    optimizer = torch.optim.ASGD(params, lr=args.lr)
     #optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
@@ -243,20 +240,24 @@ def main():
 
         # train for one epoch
         start = time.time()
-        train(train_loader, model, criterion, optimizer, epoch)
+        n_bytes, meta = train(train_loader, model, criterion, optimizer, epoch)
         train_time += time.time() - start
 
         # evaluate on validation set
         datum = validate(val_loader, model, criterion, epoch)
-        data += [{'train_time': train_time,
-                  'epoch': epoch + 1, **vars(args), **datum}]
+        data += [{'train_time': train_time, 'n_bytes': n_bytes,
+                  'epoch': epoch + 1, **vars(args), **datum, **meta}]
         df = pd.DataFrame(data)
         filename = '_'.join([str(getattr(args, key))
                              for key in ['num_workers', 'seed', 'layers',
-                                         'approx_grad', 'epochs']])
-        _write_csv(df, id=filename + '.csv')
-        pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
-                                                           'test_loss', 'test_acc', 'epoch']})
+                                         'approx_grad', 'epochs', 'svd_rank',
+                                         'widen_factor']])
+        _write_csv(df, id=filename)
+        pprint({k: v for k, v in data[-1].items()
+                if k in ['train_time', 'num_workers', 'test_loss', 'layers',
+                         'test_acc', 'epoch', 'n_bytes', 'svd_rank',
+                         'grad_compute_time', 'step_compute_time']})
+
         prec1 = datum['test_acc']
 
         # remember best prec@1 and save checkpoint
@@ -308,6 +309,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
     end = time.time()
     pbar = tqdm(enumerate(train_loader))
     start = time.time()
+    n_bytes = []
+    train_data = []
+    meta = {'grad_compute_time': 0, 'step_compute_time': 0,
+            'feed_forward_compute_time': 0, 'loss_compute_time': 0}
     for i, (input, target) in pbar:
         if use_cuda:
             target = target.cuda(**cuda_kwargs)
@@ -316,8 +321,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
         target_var = torch.autograd.Variable(target)
 
         # compute output
+        start = time.time()
         output = model(input_var)
+        meta['feed_forward_compute_time'] += time.time() - start
+        start = time.time()
         loss = criterion(output, target_var)
+        meta['loss_compute_time'] += time.time() - start
 
         # measure accuracy and record loss
         prec1 = accuracy(output.data, target, topk=(1,))[0]
@@ -325,21 +334,31 @@ def train(train_loader, model, criterion, optimizer, epoch):
         top1.update(prec1[0], input.size(0))
 
         # compute gradient and do SGD step
+        start = time.time()
         optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+        meta['grad_compute_time'] += time.time() - start
+        start = time.time()
+        #  loss, opt_meta = optimizer.step()
+        loss = optimizer.step()
+        meta['step_compute_time'] += time.time() - start
+        opt_meta = {'n_bytes': 0}
+        train_data += [opt_meta]
 
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
 
         p = 100 * i / len(train_loader)
-        pbar.set_description(f'loss={losses.avg:.3f}, acc={top1.avg:.3f} {p:.1f}%')
+        n_bytes = max(v['n_bytes'] for v in train_data)
+        pbar.set_description(f'loss={losses.avg:.3f}, acc={top1.avg:.3f} '
+                             f'bytes={n_bytes} {p:.1f}%')
 
     # log to TensorBoard
     if args.tensorboard:
         log_value('train_loss', losses.avg, epoch)
         log_value('train_acc', top1.avg, epoch)
+    return n_bytes, meta
 
 def validate(val_loader, model, criterion, epoch):
     """Perform validation on the validation set"""
