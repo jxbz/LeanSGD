@@ -3,6 +3,7 @@ import argparse
 import os
 import shutil
 import time
+import time
 from tqdm import tqdm
 
 import torch
@@ -21,10 +22,12 @@ import numpy as np
 import random
 from warnings import warn
 
+import asgd
+
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-09-12'
+today = '2017-10-12'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -53,8 +56,8 @@ parser.add_argument('--print-freq', '-p', default=10, type=int,
                     help='print frequency (default: 10)')
 parser.add_argument('--layers', default=28, type=int,
                     help='total number of layers (default: 28)')
-parser.add_argument('--widen-factor', default=10, type=int,
-                    help='widen factor (default: 10)')
+parser.add_argument('--widen-factor', default=1, type=int,
+                    help='widen factor (default: 1)')
 parser.add_argument('--droprate', default=0, type=float,
                     help='dropout probability (default: 0.0)')
 parser.add_argument('--no-augment', dest='augment', action='store_false',
@@ -72,16 +75,19 @@ parser.set_defaults(augment=True)
 args = parser.parse_args()
 args.use_cuda = use_cuda
 
-def _set_visible_gpus(num_gpus, verbose=True):
+def _set_visible_gpus(*, num_gpus=None, verbose=True):
     gpus = list(range(torch.cuda.device_count()))
-    devices = gpus[:num_gpus]
+    if num_gpus is None:
+        devices = gpus
+    else:
+        devices = gpus[:num_gpus]
     os.environ["CUDA_VISIBLE_DEVICES"] = ','.join([str(g) for g in devices])
     if verbose:
         print("CUDA_VISIBLE_DEVICES={}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
     return devices
 
-
-device_ids = _set_visible_gpus(args.num_workers)
+#  device_ids = _set_visible_gpus(args.num_workers)
+device_ids = _set_visible_gpus(num_gpus=args.num_workers)
 cuda_kwargs = {'async': True}
 
 torch.manual_seed(args.seed)
@@ -95,7 +101,7 @@ def _mkdir(dir):
     if not os.path.isdir(dir):
         os.mkdir(dir)
     return True
-    
+
 def _write_csv(df, id=''):
     filename = f'output/{today}/{id}.csv'
     _mkdir('output')
@@ -183,7 +189,9 @@ def main():
     #optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
-    optimizer = torch.optim.ASGD(model.parameters(), args.lr)
+    optimizer = asgd.ASGD(model.parameters(), args.lr)
+    optimizer.steps = 0
+    #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
 
     data = []
     train_time = 0
@@ -192,17 +200,24 @@ def main():
 
         # train for one epoch
         start = time.time()
-        train(train_loader, model, criterion, optimizer, epoch)
+        train_data = train(train_loader, model, criterion, optimizer, epoch)
+        for i in range(len(train_data)):
+            train_data[i].update(vars(args))
+        data += train_data
+
         train_time += time.time() - start
 
         # evaluate on validation set
         datum = validate(val_loader, model, criterion, epoch)
-        data += [{'train_time': train_time,
-                  'epoch': epoch + 1, **vars(args), **datum}]
+        #  data += [{'train_time': train_time,
+                  #  'epoch': epoch + 1, **vars(args), **datum}]
         df = pd.DataFrame(data)
-        _write_csv(df, id=f'{args.num_workers}_{args.seed}')
-        pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
-                                                           'test_loss', 'test_acc', 'epoch']})
+        print(df[['encode_time', 'grad_compute_time']])
+        filename = '_'.join([str(getattr(args, key)) for key in
+                             ['num_workers', 'seed', 'layers']])
+        _write_csv(df, id=filename)
+        #  pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
+                                                           #  'test_loss', 'test_acc', 'epoch']})
         prec1 = datum['test_acc']
 
         # remember best prec@1 and save checkpoint
@@ -226,11 +241,15 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     end = time.time()
     pbar = tqdm(enumerate(train_loader))
+    data = []
     start = time.time()
     for i, (input, target) in pbar:
         if use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
+        if i > 10:
+            break
+        datum = {}
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
 
@@ -245,12 +264,20 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
+        start = time.time()
         loss.backward()
-        optimizer.step()
+        datum['grad_compute_time'] = time.time() - start
+        start = time.time()
+        loss, opt_data = optimizer.step()
+        datum['total_step_time'] = time.time() - start
+        optimizer.steps += 1
+        datum.update({'loss': loss, 'iteration': optimizer.steps})
+        datum.update(opt_data)
 
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
+        data += [datum]
 
         p = 100 * i / len(train_loader)
         pbar.set_description(f'loss={losses.avg:.3f}, acc={top1.avg:.3f} {p:.1f}%')
@@ -258,6 +285,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     if args.tensorboard:
         log_value('train_loss', losses.avg, epoch)
         log_value('train_acc', top1.avg, epoch)
+    return data
 
 def validate(val_loader, model, criterion, epoch):
     """Perform validation on the validation set"""
@@ -271,8 +299,11 @@ def validate(val_loader, model, criterion, epoch):
     end = time.time()
     pbar = tqdm(enumerate(val_loader))
     for i, (input, target) in pbar:
-        target = target.cuda(**cuda_kwargs)
-        input = input.cuda(**cuda_kwargs)
+        if args.use_cuda:
+            target = target.cuda(**cuda_kwargs)
+            input = input.cuda(**cuda_kwargs)
+        if i > 10:
+            break
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
 
