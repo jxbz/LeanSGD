@@ -125,7 +125,11 @@ def encode(name=None, compress=True, rank=None):
         else:
             if take_svd:
                 storage[name]['encode'] = True
-                (u, s, v) = torch.svd(grad)
+                (u, s, v) = torch.svd(grad, some=True)
+                u = u[:, :rank]
+                s = s[:rank]
+                v = v[:, :rank]
+                del grad
                 for key, value in {'u': u, 's': s, 'v': v}.items():
                     storage[name]['svd'][key] += value
             else:
@@ -139,6 +143,8 @@ def decode(name, verbose=False, compress=True):
     Returns gradient as torch Tensor
     """
     meta = {'n_bytes': _get_size()}
+    #  print(compress, storage[name].get('encode', False),
+          #  'encode' in storage[name], meta)
     if not compress:
         return storage[name]['grad'], meta
     if name not in storage.keys():
