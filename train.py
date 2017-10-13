@@ -32,7 +32,7 @@ import comms
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-10-05'
+today = '2017-10-12'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -224,8 +224,8 @@ def main():
     for name, param in model.named_parameters():
         param.register_hook(comms.encode(name, compress=args.approx_grad,
                                          rank=args.svd_rank))
-    #  optimizer = optim.CommASGD(params, lr=args.lr, compress=args.approx_grad)
-    optimizer = torch.optim.ASGD(params, lr=args.lr)
+    optimizer = optim.CommASGD(params, lr=args.lr, compress=args.approx_grad)
+    #  optimizer = torch.optim.ASGD(params, lr=args.lr)
     #optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
@@ -254,9 +254,7 @@ def main():
                                          'widen_factor']])
         _write_csv(df, id=filename)
         pprint({k: v for k, v in data[-1].items()
-                if k in ['train_time', 'num_workers', 'test_loss', 'layers',
-                         'test_acc', 'epoch', 'n_bytes', 'svd_rank',
-                         'grad_compute_time', 'step_compute_time']})
+                if k in ['test_acc', 'epoch', 'svd_rank']})
 
         prec1 = datum['test_acc']
 
@@ -339,10 +337,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
         loss.backward()
         meta['grad_compute_time'] += time.time() - start
         start = time.time()
-        #  loss, opt_meta = optimizer.step()
-        loss = optimizer.step()
+        loss, opt_meta = optimizer.step()
+        #  loss = optimizer.step()
         meta['step_compute_time'] += time.time() - start
-        opt_meta = {'n_bytes': 0}
+        #  opt_meta = {'n_bytes': 0}
         train_data += [opt_meta]
 
         # measure elapsed time
