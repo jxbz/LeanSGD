@@ -68,8 +68,9 @@ parser.add_argument('--name', default='WideResNet-28-10', type=str,
                     help='name of experiment')
 parser.add_argument('--tensorboard', default=False,
                     help='Log progress to TensorBoard', action='store_true')
-parser.add_argument('--num_workers', default=1, help='Number of workers', type=int)
+parser.add_argument('--num_workers', default=8, help='Number of workers', type=int)
 parser.add_argument('--seed', default=42, help='Random seed', type=int)
+parser.add_argument('--svd_rank', default=None)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
@@ -83,6 +84,7 @@ def _set_visible_gpus(*, num_gpus=None, verbose=True):
         devices = gpus[:num_gpus]
     os.environ["CUDA_VISIBLE_DEVICES"] = ','.join([str(g) for g in devices])
     if verbose:
+        print(f'{len(gpus)} are available')
         print("CUDA_VISIBLE_DEVICES={}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
     return devices
 
@@ -189,7 +191,7 @@ def main():
     #optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
-    optimizer = asgd.ASGD(model.parameters(), args.lr)
+    optimizer = asgd.ASGD(model.parameters(), args.lr, rank=args.svd_rank)
     optimizer.steps = 0
     #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
 
@@ -208,17 +210,19 @@ def main():
         train_time += time.time() - start
 
         # evaluate on validation set
-        datum = validate(val_loader, model, criterion, epoch)
+        test_data = validate(val_loader, model, criterion, epoch)
+        data[-1].update({'train_time': train_time, 'epoch': epoch + 1,
+                         **test_data})
         #  data += [{'train_time': train_time,
                   #  'epoch': epoch + 1, **vars(args), **datum}]
         df = pd.DataFrame(data)
-        print(df[['encode_time', 'grad_compute_time']])
+        print(f"Epoch {epoch}: accuracy = {test_data['test_acc']}")
         filename = '_'.join([str(getattr(args, key)) for key in
                              ['num_workers', 'seed', 'layers']])
         _write_csv(df, id=filename)
         #  pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
                                                            #  'test_loss', 'test_acc', 'epoch']})
-        prec1 = datum['test_acc']
+        prec1 = test_data['test_acc']
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -247,8 +251,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
-        if i > 10:
-            break
         datum = {}
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
@@ -302,8 +304,6 @@ def validate(val_loader, model, criterion, epoch):
         if args.use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
-        if i > 10:
-            break
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
 

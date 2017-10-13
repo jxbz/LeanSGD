@@ -20,7 +20,7 @@ def _resize_tensor(x):
     # stack those related features into a tall matrix
     return x.view(size[0]*size[1], -1)
 
-def encode(grad):
+def encode(grad, rank=None):
     ret = {}
     resize = len(grad.size()) > 2
     ret['resize'] = resize
@@ -28,7 +28,13 @@ def encode(grad):
         ret['size'] = grad.size()
         grad = _resize_tensor(grad)
     if len(grad.size()) == 2:
-        ret['svd'] = torch.svd(grad, some=True)
+        (u, s, v) = torch.svd(grad, some=True)
+        if rank is not None:
+            rank = int(rank)
+            u = u[:, :rank]
+            s = s[:rank]
+            v = v[:, :rank]
+        ret['svd'] = (u, s, v)
         ret['encode'] = True
     else:
         ret['grad'] = grad
@@ -45,6 +51,11 @@ def decode(ret):
         grad = grad.view(ret['size'])
     return grad
 
+
+def _get_nbytes(data):
+    if isinstance(data, torch.tensor:
+
+    return sum([_get_nbytes(v) for k, v in data])
 
 class ASGD(Optimizer):
     """Implements Averaged Stochastic Gradient Descent.
@@ -65,10 +76,11 @@ class ASGD(Optimizer):
         http://dl.acm.org/citation.cfm?id=131098
     """
 
-    def __init__(self, params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6, weight_decay=0):
+    def __init__(self, params, lr=1e-2, lambd=1e-4, alpha=0.75, t0=1e6, weight_decay=0, rank=None):
         defaults = dict(lr=lr, lambd=lambd, alpha=alpha, t0=t0,
                         weight_decay=weight_decay)
         super(ASGD, self).__init__(params, defaults)
+        self.rank = rank
 
     def step(self, closure=None):
         """Performs a single optimization step.
@@ -81,7 +93,7 @@ class ASGD(Optimizer):
         if closure is not None:
             loss = closure()
 
-        data = {'encode_time': 0, 'decode_time': 0, 'step_time': 0}
+        data = {'encode_time': 0, 'decode_time': 0, 'step_time': 0, 'n_bytes': 0}
         for group in self.param_groups:
             for p in group['params']:
                 if p.grad is None:
@@ -90,14 +102,17 @@ class ASGD(Optimizer):
                 #  grad = p.grad.cpu()
 
                 start = time.time()
-                tmp2 = encode(tmp1)
+                tmp2 = encode(tmp1, rank=self.rank)
                 data['encode_time'] += time.time() - start
+                data['n_bytes'] += _get_nbytes(tmp2)
 
                 start = time.time()
                 tmp3 = decode(tmp2)
                 data['decode_time'] += time.time() - start
 
-                grad = p.grad.data
+                grad = tmp3.cuda()
+                #  grad = p.grad.data
+                #  print([type(x) for x in [p.grad.data, tmp3]])
 
                 start = time.time()
                 state = self.state[p]
