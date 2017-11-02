@@ -6,6 +6,14 @@ Example:
 python train.py --dataset cifar100 --layers 40 --widen-factor 4
 ```
 
+For distributed training with MPI, I (Scott) run
+
+```
+mpiexec -n 3 -hostfile hosts_file --map-by ppr:1:node python train.py
+```
+
+`ndivida-smi` is a useful tool for viewing GPU memory stats. To clear GPU memory after `C-c` a process, `killall python` worked.
+
 # Acknowledgement
 - [densenet-pytorch](https://github.com/andreasveit/densenet-pytorch)
 - Wide Residual Networks (BMVC 2016) http://arxiv.org/abs/1605.07146 by Sergey Zagoruyko and Nikos Komodakis.

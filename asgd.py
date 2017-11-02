@@ -1,6 +1,7 @@
 import math
 import time
 import torch
+import sys
 
 from torch.optim import Optimizer
 
@@ -27,13 +28,13 @@ def encode(grad, rank=None):
     if resize:
         ret['size'] = grad.size()
         grad = _resize_tensor(grad)
-    if len(grad.size()) == 2:
+    take_svd = rank is not None and len(grad.size()) == 2
+    if take_svd:
+        rank = int(rank)
         (u, s, v) = torch.svd(grad, some=True)
-        if rank is not None:
-            rank = int(rank)
-            u = u[:, :rank]
-            s = s[:rank]
-            v = v[:, :rank]
+        u = u[:, :rank]
+        s = s[:rank]
+        v = v[:, :rank]
         ret['svd'] = (u, s, v)
         ret['encode'] = True
     else:
@@ -52,10 +53,25 @@ def decode(ret):
     return grad
 
 
-def _get_nbytes(data):
-    if isinstance(data, torch.tensor:
+def _bytes_of(obj):
+    # BUG: for 2D arrays doesn't return the number of bytes
+    # that is, when sizes printed, only 1D sizes printed
+    if isinstance(obj, torch.autograd.Variable):
+        print('autograd variable')
+        return _bytes_of(obj.grad) + obj.element_size()*obj.numel()
+    cuda_tensor = getattr(obj, 'cuda', False)
+    if isinstance(obj, torch.Tensor) or cuda_tensor:
+        # t_size is a lower bound; only the number of elements
+        t_size = obj.element_size() * obj.numel()
+        #  py_size = sys.getsizeof(obj)
+        return t_size
 
-    return sum([_get_nbytes(v) for k, v in data])
+    if isinstance(obj, dict):
+        return sum([_bytes_of(v) for k, v in obj.items()])
+    if isinstance(obj, tuple):
+        return sum([_bytes_of(v) for v in obj])
+
+    return sys.getsizeof(obj)  # only counting tensors as stores
 
 class ASGD(Optimizer):
     """Implements Averaged Stochastic Gradient Descent.
@@ -98,20 +114,20 @@ class ASGD(Optimizer):
             for p in group['params']:
                 if p.grad is None:
                     continue
-                tmp1 = p.grad.data.cpu()
+                #  tmp1 = p.grad.data.cpu()
                 #  grad = p.grad.cpu()
 
-                start = time.time()
-                tmp2 = encode(tmp1, rank=self.rank)
-                data['encode_time'] += time.time() - start
-                data['n_bytes'] += _get_nbytes(tmp2)
+                #  start = time.time()
+                #  tmp2 = encode(tmp1, rank=self.rank)
+                #  data['encode_time'] += time.time() - start
+                #  data['n_bytes'] += _bytes_of(tmp2)
 
-                start = time.time()
-                tmp3 = decode(tmp2)
-                data['decode_time'] += time.time() - start
+                #  start = time.time()
+                #  tmp3 = decode(tmp2)
+                #  data['decode_time'] += time.time() - start
 
-                grad = tmp3.cuda()
-                #  grad = p.grad.data
+                #  grad = tmp3.cuda()
+                grad = p.grad.data
                 #  print([type(x) for x in [p.grad.data, tmp3]])
 
                 start = time.time()

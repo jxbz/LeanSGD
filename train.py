@@ -5,6 +5,7 @@ import shutil
 import time
 import time
 from tqdm import tqdm
+import sys
 
 import torch
 import torch.nn as nn
@@ -21,13 +22,15 @@ import pandas as pd
 import numpy as np
 import random
 from warnings import warn
+from mpi4py import MPI
 
 import asgd
+import comms
 
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-10-12'
+today = '2017-10-13'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -71,6 +74,7 @@ parser.add_argument('--tensorboard', default=False,
 parser.add_argument('--num_workers', default=8, help='Number of workers', type=int)
 parser.add_argument('--seed', default=42, help='Random seed', type=int)
 parser.add_argument('--svd_rank', default=None)
+parser.add_argument('--mpi', default=1)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
@@ -92,12 +96,34 @@ def _set_visible_gpus(*, num_gpus=None, verbose=True):
 device_ids = _set_visible_gpus(num_gpus=args.num_workers)
 cuda_kwargs = {'async': True}
 
-torch.manual_seed(args.seed)
-np.random.seed(args.seed)
-random.seed(args.seed)
+
+def _run(cmd):
+    import subprocess
+    out = subprocess.check_output(cmd.split(' '))
+    return str(out)
+
+if args.mpi:
+    comm = MPI.COMM_WORLD
+    args.rank = comm.Get_rank()
+    args.world_size = comm.Get_size()
+
+    args.seed += args.rank
+    args.batch_size = int(args.batch_size / args.world_size) + 1
+
+    print(f'Worker {args.rank} out of {args.world_size}')
+    uname = _run('uname -n').strip('\n')
+    print(f'My IP is {uname}')
+
+print('Seed = ', args.seed)
 
 best_prec1 = 0
 
+
+def _set_seed(seed):
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+_set_seed(args.seed)
 
 def _mkdir(dir):
     if not os.path.isdir(dir):
@@ -111,7 +137,7 @@ def _write_csv(df, id=''):
     df.to_csv(filename)
     return True
 def main():
-    global args, best_prec1, data
+    global args, best_prec1, data, model
     if args.tensorboard: configure("runs/%s"%(args.name))
 
     # Data loading code
@@ -153,8 +179,10 @@ def main():
 
     # create model
     print("Creating the model...")
+    _set_seed(42)
     model = WideResNet(args.layers, args.dataset == 'cifar10' and 10 or 100,
-                            args.widen_factor, dropRate=args.droprate)
+                       args.widen_factor, dropRate=args.droprate)
+    _set_seed(args.seed)
 
     # get the number of model parameters
     print('Number of model parameters: {}'.format(
@@ -166,7 +194,6 @@ def main():
         print("Moving the model to the GPU")
         model = torch.nn.DataParallel(model, device_ids=device_ids)
         model = model.cuda()
-        #model = model.cuda()
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -188,10 +215,10 @@ def main():
     criterion = nn.CrossEntropyLoss()
     if use_cuda:
         criterion = criterion.cuda()
-    #optimizer = torch.optim.SGD(model.parameters(), args.lr,
-    #                            momentum=args.momentum, nesterov=args.nesterov,
-    #                            weight_decay=args.weight_decay)
-    optimizer = asgd.ASGD(model.parameters(), args.lr, rank=args.svd_rank)
+    optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                momentum=args.momentum, nesterov=args.nesterov,
+                                weight_decay=args.weight_decay)
+    #  optimizer = asgd.ASGD(model.parameters(), args.lr, rank=args.svd_rank)
     optimizer.steps = 0
     #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
 
@@ -203,35 +230,38 @@ def main():
         # train for one epoch
         start = time.time()
         train_data = train(train_loader, model, criterion, optimizer, epoch)
-        for i in range(len(train_data)):
-            train_data[i].update(vars(args))
-        data += train_data
+        if args.rank == 0:
+            for i in range(len(train_data)):
+                train_data[i].update(vars(args))
+            data += train_data
 
-        train_time += time.time() - start
+            train_time += time.time() - start
 
-        # evaluate on validation set
-        test_data = validate(val_loader, model, criterion, epoch)
-        data[-1].update({'train_time': train_time, 'epoch': epoch + 1,
-                         **test_data})
-        #  data += [{'train_time': train_time,
-                  #  'epoch': epoch + 1, **vars(args), **datum}]
-        df = pd.DataFrame(data)
-        print(f"Epoch {epoch}: accuracy = {test_data['test_acc']}")
-        filename = '_'.join([str(getattr(args, key)) for key in
-                             ['num_workers', 'seed', 'layers']])
-        _write_csv(df, id=filename)
-        #  pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
-                                                           #  'test_loss', 'test_acc', 'epoch']})
-        prec1 = test_data['test_acc']
+            # evaluate on validation set
+            test_data = validate(val_loader, model, criterion, epoch)
+            data[-1].update({'train_time': train_time, 'epoch': epoch + 1,
+                             **test_data})
+            #  data += [{'train_time': train_time,
+                      #  'epoch': epoch + 1, **vars(args), **datum}]
+            df = pd.DataFrame(data)
+            print(f"Epoch {epoch}: accuracy = {test_data['test_acc']}")
+            #  print(df[['n_bytes', 'svd_rank']].median())
+            filename = '_'.join([str(getattr(args, key)) for key in
+                                 ['num_workers', 'seed', 'layers', 'svd_rank',
+                                  'world_size']])
+            _write_csv(df, id=filename)
+            #  pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
+                                                               #  'test_loss', 'test_acc', 'epoch']})
+            prec1 = test_data['test_acc']
 
-        # remember best prec@1 and save checkpoint
-        is_best = prec1 > best_prec1
-        best_prec1 = max(prec1, best_prec1)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
-        }, is_best)
+            # remember best prec@1 and save checkpoint
+            is_best = prec1 > best_prec1
+            best_prec1 = max(prec1, best_prec1)
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'state_dict': model.state_dict(),
+                'best_prec1': best_prec1,
+            }, is_best)
     print('Best accuracy: ', best_prec1)
 
 def train(train_loader, model, criterion, optimizer, epoch):
@@ -251,6 +281,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
+        if args.mpi:
+            comms.barrier(comm)
         datum = {}
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
@@ -263,18 +295,38 @@ def train(train_loader, model, criterion, optimizer, epoch):
         prec1 = accuracy(output.data, target, topk=(1,))[0]
         losses.update(loss.data[0], input.size(0))
         top1.update(prec1[0], input.size(0))
+        datum['train_accuracy'] = top1.avg
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
+
         start = time.time()
         loss.backward()
         datum['grad_compute_time'] = time.time() - start
+
+        if args.mpi:
+            if args.rank > 0:
+                comms.send_grads_(model)
+                model = comms.recv_model(model)
+            else:
+                grads = comms.recv_all_grads(model, comm)  # async
+                grads = comms.reduce_grads(grads, model)
+                model = comms.set_grads(model, grads)
+                model_sends = comms.send_model(model,
+                                               to=range(1, args.world_size))
+
+        if args.mpi and args.rank > 0:
+            continue
         start = time.time()
-        loss, opt_data = optimizer.step()
+        optimizer.step()
         datum['total_step_time'] = time.time() - start
+        opt_data = {}
+
         optimizer.steps += 1
-        datum.update({'loss': loss, 'iteration': optimizer.steps})
+        datum.update({'loss': loss.cpu().data.numpy()[0],
+                      'iteration': optimizer.steps})
         datum.update(opt_data)
+        pprint({k: datum[k] for k in ['train_accuracy', 'loss', 'iteration']})
 
         # measure elapsed time
         batch_time.update(time.time() - end)
