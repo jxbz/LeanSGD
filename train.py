@@ -20,6 +20,7 @@ import pandas as pd
 import numpy as np
 import random
 from warnings import warn
+from torch.multiprocessing import Process
 
 from wideresnet import WideResNet
 from datetime import datetime
@@ -51,9 +52,9 @@ parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float,
                     help='weight decay (default: 5e-4)')
 parser.add_argument('--print-freq', '-p', default=10, type=int,
                     help='print frequency (default: 10)')
-parser.add_argument('--layers', default=28, type=int,
+parser.add_argument('--layers', default=10, type=int,
                     help='total number of layers (default: 28)')
-parser.add_argument('--widen-factor', default=10, type=int,
+parser.add_argument('--widen-factor', default=1, type=int,
                     help='widen factor (default: 10)')
 parser.add_argument('--droprate', default=0, type=float,
                     help='dropout probability (default: 0.0)')
@@ -95,7 +96,7 @@ def _mkdir(dir):
     if not os.path.isdir(dir):
         os.mkdir(dir)
     return True
-    
+
 def _write_csv(df, id=''):
     filename = f'output/{today}/{id}.csv'
     _mkdir('output')
@@ -184,10 +185,17 @@ def main():
     #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
     optimizer = torch.optim.ASGD(model.parameters(), args.lr)
+    from distributed_opt import MiniBatchSGD
+    import torch.distributed as dist
+    #  rank = np.random.choice('gloo')
+    print('initing MiniBatchSGD')
+    optimizer = MiniBatchSGD(model.parameters(), args.lr)
+    print('starting iterations')
 
     data = []
     train_time = 0
     for epoch in range(args.start_epoch, args.epochs):
+        print(f"epoch {epoch}")
         adjust_learning_rate(optimizer, epoch+1)
 
         # train for one epoch
@@ -353,5 +361,16 @@ def accuracy(output, target, topk=(1,)):
         res.append(correct_k.mul_(1 / batch_size))
     return res
 
+
 if __name__ == '__main__':
+    #  size = 2
+    #  processes = []
+    #  for rank in range(size):
+        #  p = Process(target=main, kwargs={'rank': rank, 'size': size})
+        #  p.start()
+        #  processes += [p]
+
+    #  for p in processes:
+        #  p.join()
+
     main()
