@@ -1,5 +1,6 @@
 import torch
 from mpi4py import MPI
+import svd_comms
 
 
 class MiniBatchSGD(torch.optim.SGD):
@@ -8,15 +9,17 @@ class MiniBatchSGD(torch.optim.SGD):
         self.comm = MPI.COMM_WORLD
         self.rank = self.comm.Get_rank()
         self.size = self.comm.Get_size()
+        self.encode = svd_comms.encode
+        self.decode = svd_comms.decode
 
     def collect(self, grad):
         """
         Function that takes the input from one node and returns the outputs from all
         nodes.
         """
-        send = {'rank': self.rank, 'grad': grad}
+        send = {'rank': self.rank, 'grad': self.encode(grad)}
         recv = self.comm.allgather(send)
-        grads = [msg['grad'] for msg in recv]
+        grads = [self.decode(msg['grad']) for msg in recv]
         return sum(grads)
 
     def step(self, closure=None):
