@@ -1,4 +1,6 @@
 import torch
+import numpy as np
+
 
 def _resize_to_2d(x):
     """
@@ -14,7 +16,19 @@ def _resize_to_2d(x):
     return x.view(size[0]*size[1], -1)
 
 
+def _sample_svd(s):
+    probs = s / s[0]
+    sampled_idx = []
+    for i, p in enumerate(probs):
+        if np.random.rand() < p:
+            sampled_idx += [i]
+    return sampled_idx
+
+
 def encode(grad, svd_rank=3):
+    #  return {'grad': grad, 'encode': False}
+    if svd_rank <= 0:
+        return {'grad': grad, 'encode': False}
     orig_size = grad.size()
     ndims = len(grad.size())
     reshaped = False
@@ -25,9 +39,13 @@ def encode(grad, svd_rank=3):
 
     if ndims == 2:
         u, s, v = torch.svd(grad, some=True)
-        u = u[:, :svd_rank]
-        s = s[:svd_rank]
-        v = v[:, :svd_rank]
+        i = _sample_svd(s)
+        u = u[:, i]
+        s = s[torch.LongTensor(i)]
+        v = v[:, i]
+        #  u = u[:, :svd_rank]
+        #  s = s[:svd_rank]
+        #  v = v[:, :svd_rank]
         return {'u': u, 's': s, 'v': v, 'encode': True, 'orig_size': orig_size,
                 'reshaped': reshaped}
     return {'grad': grad, 'encode': False}

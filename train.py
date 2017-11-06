@@ -25,7 +25,7 @@ from torch.multiprocessing import Process
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-09-12'
+today = '2017-11-06'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -42,10 +42,10 @@ parser.add_argument('--epochs', default=200, type=int,
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int,
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=512, type=int,
+parser.add_argument('-b', '--batch-size', default=1024, type=int,
                     help='mini-batch size (default: 512)')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
-                    help='initial learning rate')
+                    help='initial learning rate. tuned')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
 parser.add_argument('--nesterov', default=True, type=bool, help='nesterov momentum')
 parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float,
@@ -68,6 +68,7 @@ parser.add_argument('--tensorboard', default=False,
                     help='Log progress to TensorBoard', action='store_true')
 parser.add_argument('--num_workers', default=1, help='Number of workers', type=int)
 parser.add_argument('--seed', default=42, help='Random seed', type=int)
+parser.add_argument('--svd_rank', default=3, help='Random seed', type=int)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
@@ -85,9 +86,15 @@ def _set_visible_gpus(num_gpus, verbose=True):
 device_ids = _set_visible_gpus(args.num_workers)
 cuda_kwargs = {'async': True}
 
-torch.manual_seed(args.seed)
-np.random.seed(args.seed)
-random.seed(args.seed)
+from mpi4py import MPI
+size = MPI.COMM_WORLD.Get_size()
+args.num_workers = max(args.num_workers, size)
+args.batch_size = args.batch_size // args.num_workers
+def _set_seed(seed):
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+_set_seed(args.seed)
 
 best_prec1 = 0
 
@@ -133,21 +140,27 @@ def main():
         normalize
         ])
 
-    kwargs = {'num_workers': args.num_workers, 'pin_memory': use_cuda}
-    assert(args.dataset == 'cifar10' or args.dataset == 'cifar100')
-    print("Creating the DataLoader...")
-    train_loader = torch.utils.data.DataLoader(
-        datasets.__dict__[args.dataset.upper()]('../data', train=True, download=True,
-                         transform=transform_train),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
-    val_loader = torch.utils.data.DataLoader(
-        datasets.__dict__[args.dataset.upper()]('../data', train=False, transform=transform_test),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
-
     # create model
     print("Creating the model...")
     model = WideResNet(args.layers, args.dataset == 'cifar10' and 10 or 100,
-                            args.widen_factor, dropRate=args.droprate)
+                       args.widen_factor, dropRate=args.droprate)
+
+    rank = MPI.COMM_WORLD.Get_rank()
+    args.seed += rank
+    _set_seed(args.seed)
+
+    print("Creating the DataLoader...")
+    kwargs = {'num_workers': args.num_workers}#, 'pin_memory': args.use_cuda}
+    assert(args.dataset == 'cifar10' or args.dataset == 'cifar100')
+    train_loader = torch.utils.data.DataLoader(
+        datasets.__dict__[args.dataset.upper()]('../data', train=True,
+                                                download=True,
+                                                transform=transform_train),
+        batch_size=args.batch_size, shuffle=True, **kwargs)
+    val_loader = torch.utils.data.DataLoader(
+        datasets.__dict__[args.dataset.upper()]('../data', train=False, transform=transform_test),
+        batch_size=args.batch_size, shuffle=False, **kwargs)
+
 
     # get the number of model parameters
     print('Number of model parameters: {}'.format(
@@ -155,7 +168,7 @@ def main():
 
     # for training on multiple GPUs.
     # Use CUDA_VISIBLE_DEVICES=0,1 to specify which GPUs to use
-    if use_cuda:
+    if args.use_cuda:
         print("Moving the model to the GPU")
         model = torch.nn.DataParallel(model, device_ids=device_ids)
         model = model.cuda()
@@ -184,12 +197,13 @@ def main():
     #optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
-    optimizer = torch.optim.ASGD(model.parameters(), args.lr)
+    #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
     from distributed_opt import MiniBatchSGD
-    import torch.distributed as dist
+    #  import torch.distributed as dist
     #  rank = np.random.choice('gloo')
     print('initing MiniBatchSGD')
-    optimizer = MiniBatchSGD(model.parameters(), args.lr)
+    print(list(model.parameters())[6].view(-1)[:5])
+    optimizer = MiniBatchSGD(model.parameters(), args.lr, svd_rank=args.svd_rank)
     print('starting iterations')
 
     data = []
@@ -200,15 +214,17 @@ def main():
 
         # train for one epoch
         start = time.time()
-        train(train_loader, model, criterion, optimizer, epoch)
+        train_data = train(train_loader, model, criterion, optimizer, epoch)
         train_time += time.time() - start
 
         # evaluate on validation set
         datum = validate(val_loader, model, criterion, epoch)
         data += [{'train_time': train_time,
                   'epoch': epoch + 1, **vars(args), **datum}]
+        data[-1]['train_data'] = train_data
         df = pd.DataFrame(data)
-        _write_csv(df, id=f'{args.num_workers}_{args.seed}')
+        ids = [str(getattr(args, key)) for key in ['layers', 'lr', 'batch_size']]
+        _write_csv(df, id=f'-'.join(ids))
         pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
                                                            'test_loss', 'test_acc', 'epoch']})
         prec1 = datum['test_acc']
@@ -254,7 +270,17 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+        _, comm_data = optimizer.step()
+
+        #  max_ = {'value': 0}
+        #  for name, param in model.named_parameters():
+            #  param_np = param.data.cpu().numpy()
+            #  if param_np.max() > max_['value']:
+                #  max_['value'] = param_np.max()
+                #  max_['name'] = name
+                #  max_['idx'] = param_np.flat[:].argmax()
+                #  max_['iteration'] = i
+        #  print(max_)
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -262,10 +288,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         p = 100 * i / len(train_loader)
         pbar.set_description(f'loss={losses.avg:.3f}, acc={top1.avg:.3f} {p:.1f}%')
+
     # log to TensorBoard
     if args.tensorboard:
         log_value('train_loss', losses.avg, epoch)
         log_value('train_acc', top1.avg, epoch)
+    return comm_data
 
 def validate(val_loader, model, criterion, epoch):
     """Perform validation on the validation set"""
@@ -363,14 +391,4 @@ def accuracy(output, target, topk=(1,)):
 
 
 if __name__ == '__main__':
-    #  size = 2
-    #  processes = []
-    #  for rank in range(size):
-        #  p = Process(target=main, kwargs={'rank': rank, 'size': size})
-        #  p.start()
-        #  processes += [p]
-
-    #  for p in processes:
-        #  p.join()
-
     main()

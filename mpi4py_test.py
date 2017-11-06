@@ -10,4 +10,6 @@ random_send = {i: np.random.choice(10, size=rank) for i in range(3)}
 send.update(random_send)
 
 recv = comm.allgather(send)
-pprint(f"rank {rank} received {recv}")
+print(f"rank {rank} received")
+pprint(recv)
+print(type(recv), type(recv[0]))

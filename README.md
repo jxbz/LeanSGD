@@ -6,6 +6,11 @@ Example:
 python train.py --dataset cifar100 --layers 40 --widen-factor 4
 ```
 
+# Distributed training
+``` shell
+mpiexec -n 3 -hostfile hosts_file --map-by ppr:1:node python train.py
+```
+
 # Acknowledgement
 - [densenet-pytorch](https://github.com/andreasveit/densenet-pytorch)
 - Wide Residual Networks (BMVC 2016) http://arxiv.org/abs/1605.07146 by Sergey Zagoruyko and Nikos Komodakis.
