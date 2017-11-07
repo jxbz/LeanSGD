@@ -30,8 +30,8 @@ def _bytes_of(obj):
 
 class MiniBatchSGD(torch.optim.SGD):
     def __init__(self, *args, **kwargs):
-        self.svd_rank = kwargs.pop('svd_rank', 3)
-        self.encode_kwargs = {key: getattr(self, key) for key in ['svd_rank']}
+        self.compress = kwargs.pop('compress', False)
+        self.encode_kwargs = {key: getattr(self, key) for key in ['compress']}
         super(MiniBatchSGD, self).__init__(*args, **kwargs)
         self.comm = MPI.COMM_WORLD
         self.rank = self.comm.Get_rank()
@@ -78,9 +78,12 @@ class MiniBatchSGD(torch.optim.SGD):
             dampening = group['dampening']
             nesterov = group['nesterov']
 
+            #  reqs = self.collect_all(group['params'])
             for p in group['params']:
                 if p.grad is None:
                     continue
+                # reqs[i].wait()
+                # d_p = self._format_request(reqs[i].get_data())
                 d_p, times = self.collect(p.grad.data)
                 data += [times]
                 if weight_decay != 0:

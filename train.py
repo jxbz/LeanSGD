@@ -68,11 +68,12 @@ parser.add_argument('--tensorboard', default=False,
                     help='Log progress to TensorBoard', action='store_true')
 parser.add_argument('--num_workers', default=1, help='Number of workers', type=int)
 parser.add_argument('--seed', default=42, help='Random seed', type=int)
-parser.add_argument('--svd_rank', default=3, help='Random seed', type=int)
+parser.add_argument('--compress', default=1, help='Random seed', type=int)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
 args.use_cuda = use_cuda
+args.compress = bool(args.compress)
 
 def _set_visible_gpus(num_gpus, verbose=True):
     gpus = list(range(torch.cuda.device_count()))
@@ -203,7 +204,7 @@ def main():
     #  rank = np.random.choice('gloo')
     print('initing MiniBatchSGD')
     print(list(model.parameters())[6].view(-1)[:5])
-    optimizer = MiniBatchSGD(model.parameters(), args.lr, svd_rank=args.svd_rank)
+    optimizer = MiniBatchSGD(model.parameters(), args.lr, compress=args.compress)
     print('starting iterations')
 
     data = []
@@ -221,12 +222,23 @@ def main():
         datum = validate(val_loader, model, criterion, epoch)
         data += [{'train_time': train_time,
                   'epoch': epoch + 1, **vars(args), **datum}]
+        if epoch > 0:
+            data[-1]['epoch_train_time'] = data[-1]['train_time'] - data[-2]['train_time']
         data[-1]['train_data'] = train_data
+        for key in train_data[-1]:
+            values = [datum[key] for i, datum in enumerate(train_data)]
+            if 'time' in key:
+                data[-1]["epoch_" + key] = np.sum(values)
+            else:
+                data[-1]["epoch_" + key] = values[0]
+
         df = pd.DataFrame(data)
-        ids = [str(getattr(args, key)) for key in ['layers', 'lr', 'batch_size']]
+        ids = [str(getattr(args, key)) for key in ['layers', 'lr', 'batch_size',
+                                                   'compress']]
         _write_csv(df, id=f'-'.join(ids))
-        pprint({k: v for k, v in data[-1].items() if k in ['train_time', 'num_workers',
-                                                           'test_loss', 'test_acc', 'epoch']})
+        pprint({k: v for k, v in data[-1].items()
+                if k in ['train_time', 'num_workers', 'test_loss',
+                         'test_acc', 'epoch'] or 'time' in k})
         prec1 = datum['test_acc']
 
         # remember best prec@1 and save checkpoint
@@ -250,6 +262,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     end = time.time()
     pbar = tqdm(enumerate(train_loader))
+    comm_data = []
     start = time.time()
     for i, (input, target) in pbar:
         if use_cuda:
@@ -270,7 +283,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
-        _, comm_data = optimizer.step()
+        _, comm_datum = optimizer.step()
+        comm_data += [comm_datum]
 
         #  max_ = {'value': 0}
         #  for name, param in model.named_parameters():
@@ -391,4 +405,5 @@ def accuracy(output, target, topk=(1,)):
 
 
 if __name__ == '__main__':
+    print("In train.py")
     main()

@@ -25,9 +25,8 @@ def _sample_svd(s):
     return sampled_idx
 
 
-def encode(grad, svd_rank=3):
-    #  return {'grad': grad, 'encode': False}
-    if svd_rank <= 0:
+def encode(grad, compress=True):
+    if not compress:
         return {'grad': grad, 'encode': False}
     orig_size = grad.size()
     ndims = len(grad.size())
@@ -41,7 +40,7 @@ def encode(grad, svd_rank=3):
         u, s, v = torch.svd(grad, some=True)
         i = _sample_svd(s)
         u = u[:, i]
-        s = s[torch.LongTensor(i)]
+        s = s[torch.cuda.LongTensor(i)]
         v = v[:, i]
         #  u = u[:, :svd_rank]
         #  s = s[:svd_rank]
@@ -55,6 +54,7 @@ def decode(encode_output):
     if not encode_output.get('encode', False):
         return encode_output['grad']
     u, s, v = (encode_output[key] for key in ['u', 's', 'v'])
+    s = s[0] / s
     grad_approx = u @ torch.diag(s) @ v.t()
     if encode_output.get('reshaped', False):
         grad_approx = grad_approx.view(encode_output['orig_size'])
