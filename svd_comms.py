@@ -27,32 +27,53 @@ def _sample_svd(s):
 
 def encode(grad, compress=True):
     if not compress:
-        return {'grad': grad, 'encode': False}
-    orig_size = grad.size()
+        size = list(grad.size())
+        info = [0, len(size)] + size
+        info = torch.Tensor(info)
+        return torch.cat((info, grad.view(-1)), 0)
+
+    orig_size = list(grad.size())
     ndims = len(grad.size())
-    reshaped = False
     if ndims > 2:
         grad = _resize_to_2d(grad)
-        ndims = len(grad.size())
-        reshaped = True
+        size = list(grad.size())
+        ndims = len(size)
+        reshaped = [1, len(size), size]
+        reshaped_flag = True
 
     if ndims == 2:
         u, s, v = torch.svd(grad, some=True)
-        i = _sample_svd(s)
-        u = u[:, i]
-        s = s[torch.cuda.LongTensor(i)]
-        v = v[:, i]
-        #  u = u[:, :svd_rank]
-        #  s = s[:svd_rank]
-        #  v = v[:, :svd_rank]
-        return {'u': u, 's': s, 'v': v, 'encode': True, 'orig_size': orig_size,
-                'reshaped': reshaped}
-    return {'grad': grad, 'encode': False}
+        #  i = _sample_svd(s)
+        #  u = u[:, i]
+        #  s = s[torch.cuda.LongTensor(i)]
+        #  v = v[:, i]
+        u = u[:, :compress]
+        s = s[:compress]
+        v = v[:, :compress]
+
+        info = [1, len(orig_size)] + orig_size
+        if reshaped_flag:
+            info += reshaped
+        else:
+            info += [0]
+
+        info = torch.Tensor(info)
+        return torch.cat((info, u.view(-1), s.view(-1), v.view(-1)), 0)
+
+    info = [0, len(orig_size)] + orig_size
+    info = torch.Tensor(info)
+    return torch.cat((info, grad.view(-1)), 0)
 
 
 def decode(encode_output):
-    if not encode_output.get('encode', False):
-        return encode_output['grad']
+    encode = encode_output[0]
+    if not encode:
+        ndims = encode_output[1]
+        size = encode_output[2:ndims]
+        grad = encode_output[ndims:].view(size)
+        return grad
+    #  reshaped =
+
     u, s, v = (encode_output[key] for key in ['u', 's', 'v'])
     s = s[0] / s
     grad_approx = u @ torch.diag(s) @ v.t()

@@ -234,7 +234,7 @@ def main():
 
         df = pd.DataFrame(data)
         ids = [str(getattr(args, key)) for key in ['layers', 'lr', 'batch_size',
-                                                   'compress']]
+                                                   'compress', 'seed']]
         _write_csv(df, id=f'-'.join(ids))
         pprint({k: v for k, v in data[-1].items()
                 if k in ['train_time', 'num_workers', 'test_loss',

@@ -40,26 +40,24 @@ class MiniBatchSGD(torch.optim.SGD):
         self.decode = svd_comms.decode
         print(f"dist_opt.py: rank {self.rank} of {self.size}")
 
-    def collect(self, grad):
-        """
-        Function that takes the input from one node and returns the outputs from all
-        nodes.
+    def _encode(params):
+        reqs = []
+        recvs = []
+        for param in params:
+            send = self.encode(param)
+            recv = np.array([send] * self.num_workers)
+            req = [self.comm.Ialltoall(send, recv)]
+            reqs += [req]
+            recvs += [recv]
+        return recvs, reqs
 
-        This function distributes parameters to every machine correctly
-        [param1(machine1) == param1(machine2)] if MPI is installed correctly
+    def _decode(recvs):
         """
-        t0 = time.time()
-        send = self.encode(grad, **self.encode_kwargs)
-        t1 = time.time()
-        recv = self.comm.allgather(send)
-        t2 = time.time()
-        grads = [self.decode(msg) for msg in recv]
-        t3 = time.time()
-
-        times = {'encode_time': t1 - t0, 'comm_time': t2 - t1,
-                 'decode_time': t3 - t2, 'rank': self.rank, 'size': self.size,
-                 'msg_bytes': _bytes_of(recv)}
-        return sum(grads), times
+        recvs : [encode(grad) for node in nodes]
+        Returns: sum(grads)
+        """
+        grads = [self.decode(recv) for recv in recvs]
+        return sum(grads)
 
     def step(self, closure=None):
         """Performs a single optimization step.
@@ -78,13 +76,14 @@ class MiniBatchSGD(torch.optim.SGD):
             dampening = group['dampening']
             nesterov = group['nesterov']
 
+            recvs, reqs = _encode(group['params'])
             #  reqs = self.collect_all(group['params'])
-            for p in group['params']:
+            for p, recv, req in zip(group['params'], recvs, reqs):
                 if p.grad is None:
                     continue
-                # reqs[i].wait()
+                req.wait()
                 # d_p = self._format_request(reqs[i].get_data())
-                d_p, times = self.collect(p.grad.data)
+                d_p, times = self._decode(recv)
                 data += [times]
                 if weight_decay != 0:
                     d_p.add_(weight_decay, p.data)
