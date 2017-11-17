@@ -25,7 +25,7 @@ from torch.multiprocessing import Process
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-11-06'
+today = '2017-11-15'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -68,12 +68,16 @@ parser.add_argument('--tensorboard', default=False,
                     help='Log progress to TensorBoard', action='store_true')
 parser.add_argument('--num_workers', default=1, help='Number of workers', type=int)
 parser.add_argument('--seed', default=42, help='Random seed', type=int)
-parser.add_argument('--compress', default=1, help='Random seed', type=int)
+parser.add_argument('--compress', default=1, help='Boolean int: compress or not', type=int)
+parser.add_argument('--svd_rescale', default=1, help='Boolean int: compress or not', type=int)
+parser.add_argument('--svd_rank', default=1, help='Boolean int: compress or not', type=int)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
 args.use_cuda = use_cuda
 args.compress = bool(args.compress)
+args.svd_rescale = bool(args.svd_rescale)
+print("args.compress ==", args.compress)
 
 def _set_visible_gpus(num_gpus, verbose=True):
     gpus = list(range(torch.cuda.device_count()))
@@ -199,12 +203,20 @@ def main():
     #                            momentum=args.momentum, nesterov=args.nesterov,
     #                            weight_decay=args.weight_decay)
     #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
-    from distributed_opt import MiniBatchSGD
+    #  from distributed_opt import MiniBatchSGD
+    from comms import MPI_PS
+    import svd_comms
     #  import torch.distributed as dist
     #  rank = np.random.choice('gloo')
     print('initing MiniBatchSGD')
     print(list(model.parameters())[6].view(-1)[:5])
-    optimizer = MiniBatchSGD(model.parameters(), args.lr, compress=args.compress)
+    sgd_kwargs = {'momentum': arg.momentum,
+                  'nesterov': args.nesterov,
+                  'weight_decay': args.weight_decay}
+    optimizer = MPI_PS(model.parameters(), args.lr, compress=args.compress,
+                       encode=svd_comms.encode, decode=svd_comms.decode,
+                       rescale=args.svd_rescale, svd_rank=args.svd_rank,
+                       **sgd_kwargs)
     print('starting iterations')
 
     data = []
@@ -215,31 +227,35 @@ def main():
 
         # train for one epoch
         start = time.time()
-        train_data = train(train_loader, model, criterion, optimizer, epoch)
+        if epoch > 0:
+            train_data = train(train_loader, model, criterion, optimizer, epoch)
+        else:
+            train_data = []
         train_time += time.time() - start
 
         # evaluate on validation set
         datum = validate(val_loader, model, criterion, epoch)
         data += [{'train_time': train_time,
                   'epoch': epoch + 1, **vars(args), **datum}]
+        data[-1]['train_data'] = train_data
         if epoch > 0:
             data[-1]['epoch_train_time'] = data[-1]['train_time'] - data[-2]['train_time']
-        data[-1]['train_data'] = train_data
-        for key in train_data[-1]:
-            values = [datum[key] for i, datum in enumerate(train_data)]
-            if 'time' in key:
-                data[-1]["epoch_" + key] = np.sum(values)
-            else:
-                data[-1]["epoch_" + key] = values[0]
+            for key in train_data[-1]:
+                values = [datum[key] for i, datum in enumerate(train_data)]
+                if 'time' in key:
+                    data[-1]["epoch_" + key] = np.sum(values)
+                else:
+                    data[-1]["epoch_" + key] = values[0]
 
         df = pd.DataFrame(data)
-        ids = [str(getattr(args, key)) for key in ['layers', 'lr', 'batch_size',
-                                                   'compress', 'seed']]
+        ids = [str(getattr(args, key))
+               for key in ['layers', 'lr', 'batch_size', 'compress', 'seed',
+                           'num_workers', 'svd_rank', 'svd_rescale']]
         _write_csv(df, id=f'-'.join(ids))
         pprint({k: v for k, v in data[-1].items()
-                if k in ['train_time', 'num_workers', 'test_loss',
-                         'test_acc', 'epoch'] or 'time' in k})
-        prec1 = datum['test_acc']
+                if k in ['train_time', 'num_workers', 'loss_test',
+                         'acc_test', 'epoch'] or 'time' in k})
+        prec1 = datum['acc_test']
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -284,17 +300,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
         optimizer.zero_grad()
         loss.backward()
         _, comm_datum = optimizer.step()
-        comm_data += [comm_datum]
-
-        #  max_ = {'value': 0}
-        #  for name, param in model.named_parameters():
-            #  param_np = param.data.cpu().numpy()
-            #  if param_np.max() > max_['value']:
-                #  max_['value'] = param_np.max()
-                #  max_['name'] = name
-                #  max_['idx'] = param_np.flat[:].argmax()
-                #  max_['iteration'] = i
-        #  print(max_)
+        comm_data += [{'loss_train_avg': losses.avg, 'loss_train': losses.val,
+                       'acc_train_avg': top1.avg,   'acc_train': top1.val,
+                       **comm_datum}]
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -347,8 +355,8 @@ def validate(val_loader, model, criterion, epoch):
     if args.tensorboard:
         log_value('val_loss', losses.avg, epoch)
         log_value('val_acc', top1.avg, epoch)
-    return {'test_loss': losses.avg,
-            'test_acc': top1.avg}
+    return {'loss_test': losses.avg,
+            'acc_test': top1.avg}
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
@@ -381,7 +389,10 @@ class AverageMeter(object):
 
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR divided by 5 at 60th, 120th and 160th epochs"""
-    lr = args.lr * ((0.2 ** int(epoch >= 60)) * (0.2 ** int(epoch >= 120))* (0.2 ** int(epoch >= 160)))
+    #  lr = args.lr * ((0.2 ** int(epoch >= 60)) * (0.2 ** int(epoch >= 120))* (0.2 ** int(epoch >= 160)))
+    lr = args.lr
+    if epoch % 3 == 0 and epoch > 1:
+        lr = args.lr * 0.97**(epoch / 3)
     # log to TensorBoard
     if args.tensorboard:
         log_value('learning_rate', lr, epoch)
