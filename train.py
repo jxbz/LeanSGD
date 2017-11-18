@@ -29,7 +29,6 @@ today = '2017-11-15'
 if today != today_datetime:
     warn('Is today set correctly?')
 
-
 # used for logging to TensorBoard
 if False:
     from tensorboard_logger import configure, log_value
@@ -70,7 +69,7 @@ parser.add_argument('--num_workers', default=1, help='Number of workers', type=i
 parser.add_argument('--seed', default=42, help='Random seed', type=int)
 parser.add_argument('--compress', default=1, help='Boolean int: compress or not', type=int)
 parser.add_argument('--svd_rescale', default=1, help='Boolean int: compress or not', type=int)
-parser.add_argument('--svd_rank', default=1, help='Boolean int: compress or not', type=int)
+parser.add_argument('--svd_rank', default=0, help='Boolean int: compress or not', type=int)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
@@ -93,8 +92,10 @@ cuda_kwargs = {'async': True}
 
 from mpi4py import MPI
 size = MPI.COMM_WORLD.Get_size()
-args.num_workers = max(args.num_workers, size)
-args.batch_size = args.batch_size // args.num_workers
+#  args.num_workers = max(args.num_workers, size)
+args.world_size = size
+args.batch_size = args.batch_size // args.world_size
+print(args.world_size, args.batch_size)
 def _set_seed(seed):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -210,9 +211,9 @@ def main():
     #  rank = np.random.choice('gloo')
     print('initing MiniBatchSGD')
     print(list(model.parameters())[6].view(-1)[:5])
-    sgd_kwargs = {'momentum': arg.momentum,
-                  'nesterov': args.nesterov,
-                  'weight_decay': args.weight_decay}
+    sgd_kwargs = {'momentum': 0,  # arg.momentum,
+                  'nesterov': 0,  # args.nesterov,
+                  'weight_decay': 0}  # args.weight_decay}
     optimizer = MPI_PS(model.parameters(), args.lr, compress=args.compress,
                        encode=svd_comms.encode, decode=svd_comms.decode,
                        rescale=args.svd_rescale, svd_rank=args.svd_rank,
@@ -221,7 +222,7 @@ def main():
 
     data = []
     train_time = 0
-    for epoch in range(args.start_epoch, args.epochs):
+    for epoch in range(args.start_epoch, args.epochs + 1):
         print(f"epoch {epoch}")
         adjust_learning_rate(optimizer, epoch+1)
 
@@ -329,8 +330,9 @@ def validate(val_loader, model, criterion, epoch):
     end = time.time()
     pbar = tqdm(enumerate(val_loader))
     for i, (input, target) in pbar:
-        target = target.cuda(**cuda_kwargs)
-        input = input.cuda(**cuda_kwargs)
+        if args.use_cuda:
+            target = target.cuda(**cuda_kwargs)
+            input = input.cuda(**cuda_kwargs)
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
 

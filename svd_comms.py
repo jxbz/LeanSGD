@@ -22,6 +22,8 @@ def _sample_svd(s, rank=0):
     for i, p in enumerate(probs):
         if np.random.rand() < p:
             sampled_idx += [i]
+    if len(sampled_idx) == 0:
+        return _sample_svd(s, rank=rank)
     return sampled_idx
 
 
@@ -46,6 +48,7 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True):
             i = torch.LongTensor(i)
             if torch.cuda.is_available():
                 i = i.cuda()
+            print(svd_rank, i.size()[0])
             u = u[:, i]
             s = s[i]
             v = v[:, i]
