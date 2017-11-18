@@ -205,7 +205,7 @@ def main():
     #                            weight_decay=args.weight_decay)
     #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
     #  from distributed_opt import MiniBatchSGD
-    from comms import MPI_PS
+    from pytorch_ps_mpi import MPI_PS
     import svd_comms
     #  import torch.distributed as dist
     #  rank = np.random.choice('gloo')
