@@ -21,11 +21,12 @@ import numpy as np
 import random
 from warnings import warn
 from torch.multiprocessing import Process
+import random
 
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-11-15'
+today = '2017-11-20'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -65,11 +66,16 @@ parser.add_argument('--name', default='WideResNet-28-10', type=str,
                     help='name of experiment')
 parser.add_argument('--tensorboard', default=False,
                     help='Log progress to TensorBoard', action='store_true')
-parser.add_argument('--num_workers', default=1, help='Number of workers', type=int)
+parser.add_argument('--num_workers', default=1, help='Number of workers',
+                    type=int)
 parser.add_argument('--seed', default=42, help='Random seed', type=int)
-parser.add_argument('--compress', default=1, help='Boolean int: compress or not', type=int)
-parser.add_argument('--svd_rescale', default=1, help='Boolean int: compress or not', type=int)
-parser.add_argument('--svd_rank', default=0, help='Boolean int: compress or not', type=int)
+parser.add_argument('--compress', default=1,
+                    help='Boolean int: compress or not', type=int)
+parser.add_argument('--svd_rescale', default=1,
+                    help='Boolean int: compress or not', type=int)
+parser.add_argument('--svd_rank', default=0, help='Boolean int: compress or not',
+                    type=int)
+parser.add_argument('--device', default=0, help='Which GPU to use', type=int)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
@@ -78,16 +84,20 @@ args.compress = bool(args.compress)
 args.svd_rescale = bool(args.svd_rescale)
 print("args.compress ==", args.compress)
 
-def _set_visible_gpus(num_gpus, verbose=True):
+
+def _set_visible_gpus(num_gpus, device=None, verbose=True):
     gpus = list(range(torch.cuda.device_count()))
-    devices = gpus[:num_gpus]
+    if device is not None:
+        devices = [device]
+    else:
+        devices = gpus[:num_gpus]
     os.environ["CUDA_VISIBLE_DEVICES"] = ','.join([str(g) for g in devices])
     if verbose:
         print("CUDA_VISIBLE_DEVICES={}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
     return devices
 
-
-device_ids = _set_visible_gpus(args.num_workers)
+#  device_ids = _set_visible_gpus(args.num_workers, random_gpu=args.random_gpu)
+device_ids = _set_visible_gpus(args.num_workers, device=args.device)
 cuda_kwargs = {'async': True}
 
 from mpi4py import MPI
@@ -200,9 +210,9 @@ def main():
     criterion = nn.CrossEntropyLoss()
     if use_cuda:
         criterion = criterion.cuda()
-    #optimizer = torch.optim.SGD(model.parameters(), args.lr,
-    #                            momentum=args.momentum, nesterov=args.nesterov,
-    #                            weight_decay=args.weight_decay)
+    #  optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                              #  momentum=args.momentum, nesterov=args.nesterov,
+                              #  weight_decay=args.weight_decay)
     #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
     #  from distributed_opt import MiniBatchSGD
     from pytorch_ps_mpi import MPI_PS
@@ -211,13 +221,9 @@ def main():
     #  rank = np.random.choice('gloo')
     print('initing MiniBatchSGD')
     print(list(model.parameters())[6].view(-1)[:5])
-    sgd_kwargs = {'momentum': 0,  # arg.momentum,
-                  'nesterov': 0,  # args.nesterov,
-                  'weight_decay': 0}  # args.weight_decay}
     optimizer = MPI_PS(model.parameters(), args.lr, compress=args.compress,
                        encode=svd_comms.encode, decode=svd_comms.decode,
-                       rescale=args.svd_rescale, svd_rank=args.svd_rank,
-                       **sgd_kwargs)
+                       rescale=args.svd_rescale, svd_rank=args.svd_rank)
     print('starting iterations')
 
     data = []
@@ -285,6 +291,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
+        print(i)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
 
@@ -300,7 +307,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # compute gradient and do SGD step
         optimizer.zero_grad()
         loss.backward()
-        _, comm_datum = optimizer.step()
+        r = optimizer.step()
+        if r is not None:
+            _, comm_datum = r
+        else:
+            comm_datum = {}
         comm_data += [{'loss_train_avg': losses.avg, 'loss_train': losses.val,
                        'acc_train_avg': top1.avg,   'acc_train': top1.val,
                        **comm_datum}]
