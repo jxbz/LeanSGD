@@ -1,6 +1,7 @@
 from __future__ import print_function
 import argparse
 import os
+import sys
 import shutil
 import time
 from tqdm import tqdm
@@ -26,7 +27,7 @@ import random
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-11-20'
+today = '2017-11-30'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -126,6 +127,7 @@ def _write_csv(df, id=''):
     _mkdir(f'output/{today}')
     df.to_csv(filename)
     return True
+
 def main():
     global args, best_prec1, data
     if args.tensorboard: configure("runs/%s"%(args.name))
@@ -284,7 +286,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
-    pbar = tqdm(enumerate(train_loader))
+    pbar = tqdm(enumerate(train_loader), leave=True)
     comm_data = []
     start = time.time()
     for i, (input, target) in pbar:
@@ -339,7 +341,7 @@ def validate(val_loader, model, criterion, epoch):
     model.eval()
 
     end = time.time()
-    pbar = tqdm(enumerate(val_loader))
+    pbar = tqdm(enumerate(val_loader), leave=True)
     for i, (input, target) in pbar:
         if args.use_cuda:
             target = target.cuda(**cuda_kwargs)

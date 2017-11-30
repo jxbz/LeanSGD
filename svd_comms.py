@@ -23,12 +23,13 @@ def _sample_svd(s, rank=0):
         if np.random.rand() < p:
             sampled_idx += [i]
     rank_hat = len(sampled_idx)
-    if rank_hat == 0 or (rank != 0 and np.abs(rank_hat - rank) >= 2):
+    if rank_hat == 0:# or (rank != 0 and np.abs(rank_hat - rank) >= 3):
         return _sample_svd(s, rank=rank)
     return sampled_idx
 
 
 def encode(grad, compress=True, svd_rank=0, random_sample=True):
+    grad = grad + 1e-7*torch.randn(*grad.size()).cuda()
     if not compress:
         size = list(grad.size())
         return {'grad': grad, 'encode': False}
@@ -44,6 +45,7 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True):
 
     if ndims == 2:
         u, s, v = torch.svd(grad, some=True)
+
         if random_sample:
             i = _sample_svd(s, rank=svd_rank)
             i = torch.LongTensor(i)
