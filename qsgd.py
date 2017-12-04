@@ -1,58 +1,48 @@
+from functools import reduce
+import numpy as np
+from scipy import stats
 import torch
 
 
-def rand(p=0.5):
-    return 1 - torch.round(torch.rand() + 0.5 - p)
-
-
-def prob(a, s, l):
-    return a*s - l
-
-
-def encode(v, s=4):
-    """
-    Parameters
-    ==========
-    v : torch.Tensor
-        Array of the gradient to encode
-
-    Returns
-    =======
-    coding : dict
-        The dictionary that encodes the gradient
-
-    Notes
-    =====
-    Q_s(v) = ||v||_2 sign(v) rand(v, s)
-
-    * where rand(v, s) are independent random variables. That is, let
-      0 <= l < s such that | v_i | / | |v | |_2 in [l / s, (l + 1) / s]. It's
-      the quantization level of v_i.
-    * where rand(v, s) = l / s wp 1 - p(| v_i | / | |v||_2, s), (l+1)/s o/w
-    * where p(a, s) = a * s - l
-
-
-    from section 3.2 of QSGD paper by Alistar et. al.
-    """
+def encode(v):
     norm = torch.norm(v)
-    signs = []
-    rand_vars = []
-    for vi in v.view(-1):
-        abs_vi = torch.abs(vi)
-        l = torch.floor(abs_vi * s / norm)
-        r = rand(p=1 - prob(abs_vi / norm, s, l))
-        signs += [torch.sign(vi)]
-        rand_vars += [(r, l)]
-    return {'rand_vars': rand_vars, 'signs': signs, 'shape': v.size(),
-            'norm': norm, 's': s}
+    w = v.view(-1)
+
+    signs = torch.sign(w)
+    probs = torch.abs(w) / norm
+    probs = probs.numpy()
+
+    #  mask = torch.distributions.Bernoulli(probs)  # on master, not 0.2
+    mask = stats.bernoulli.rvs(probs)
+    mask = torch.Tensor(mask.astype('float32')).byte()
+
+    idx = torch.arange(0, len(w))
+    selected = torch.masked_select(idx, mask).long()
+    signs = torch.masked_select(signs, mask)
+    return {'signs': signs, 'size': v.size(), 'selected': selected,
+            'norm': norm}
 
 
-def decode(out):
-    v = torch.zeros(out['shape'])
+def decode(code):
+    v = torch.zeros(code['size'])
     flat = v.view(-1)
-    norm = out['norm']
-    s = out['s']
-    for i, (sign, (r, l)) in enumerate(zip(out['signs'], out['rand_vars'])):
-        r = l/s if r == 1 else (l + 1)/s
-        flat[i] = sign * r * norm
+    flat[code['selected']] = code['norm'] * code['signs']
     return v
+
+if __name__ == "__main__":
+    n = 500
+    x = torch.rand(n)
+    repeats = 1000
+
+    codes = [encode(x) for _ in range(repeats)]
+    approxs = [decode(code) for code in codes]
+    data = map(lambda arg: {'y': arg[1], 'norm(y)**2': torch.norm(arg[1])**2,
+                            'len(signs)': len(arg[0]['signs'])},
+               zip(codes, approxs))
+    sums = reduce(lambda x, y: {k: x[k] + y[k] for k in x}, data)
+    avg = {k: v / len(codes) for k, v in sums.items()}
+
+    assert avg['norm(y)**2'] <= np.sqrt(n) * torch.norm(x)**2
+    assert avg['len(signs)'] <= np.sqrt(n)
+    rel_error = torch.norm(avg['y'] - x) / torch.norm(x)
+    assert rel_error < 0.2
