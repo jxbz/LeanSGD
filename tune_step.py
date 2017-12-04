@@ -39,7 +39,10 @@ def macc(stepsize, cmd=''):
     print("Done with check_output")
     lines = out.split(b'\n')
     lines = [l.decode() for l in lines]
-    _acc = _find_best_acc(lines)
+    try:
+        _acc = _find_best_acc(lines)
+    except Exception:
+        _acc = 0.0
     print('stepsize={:0.4f}, acc={}'.format(stepsize, _acc))
     return -1 * _acc
 
@@ -109,14 +112,16 @@ if __name__ == "__main__":
     #  print(len(hist))
     #  sys.exit(0)
     #  client = Client(LocalCluster(n_workers=4))
-    ip = '172.31.13.18:8786'
+    ip = '172.31.36.170:8786'
     client = Client(ip)
+    #  client = Client()
     #  client = Client()
     #  client = None
     args = ['--compress=0']
     args += [f'--compress=1 --svd_rank={rank} --svd_rescale={rescale}'
-             for rank in [1, 2, 4, 8, 9] for rescale in [0, 1]]
+             for rank in [1, 2, 4, 8] for rescale in [0, 1]]
     args += ['--compress=1 --svd_rank=0 --svd_rescale=1']
+    args += ['--compress=1 --svd_rank=-1 --svd_rescale=0']
     print(f"running len(args) = {len(args)} jobs")
 
     layers = 100
@@ -124,7 +129,7 @@ if __name__ == "__main__":
     home = '/home/ec2-user'
     cmd = (f'mpirun -n {n_workers} sudo {home}/anaconda3/bin/python '
            f'{home}/WideResNet-pytorch/train.py --layers={layers} '
-           '--lr={lr} --epochs=3 --num_workers=1 '
+           '--lr={lr} --epochs=6 --num_workers=1 '
            '--nesterov=0 --weight-decay=0 --momentum=0')
     cmds = []
     jobs = []
@@ -142,6 +147,6 @@ if __name__ == "__main__":
         print(f"{run} found stepsize_est = {x_hat} with history = {history}")
 
         uid = run.replace(' ', '')
-        with open('output/2017-11-30/' + uid + '.pkl', 'wb') as f:
+        with open('output/2017-11-31/' + uid + '.pkl', 'wb') as f:
             pickle.dump({'stepsize_est': x_hat, 'cmd': run,
                          'history': history}, f)

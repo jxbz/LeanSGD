@@ -27,7 +27,7 @@ import random
 from wideresnet import WideResNet
 from datetime import datetime
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-11-30'
+today = '2017-12-04'
 if today != today_datetime:
     warn('Is today set correctly?')
 

@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+import warnings
+import sys
 
 
 def _resize_to_2d(x):
@@ -17,19 +19,24 @@ def _resize_to_2d(x):
 
 
 def _sample_svd(s, rank=0):
+    if s[0] < 1e-6:
+        return s[0], torch.Tensor([1.0])
     probs = s / s[0] if rank == 0 else rank * s / s.sum()
     sampled_idx = []
+    sample_probs = []
     for i, p in enumerate(probs):
         if np.random.rand() < p:
             sampled_idx += [i]
+            sample_probs += [p]
     rank_hat = len(sampled_idx)
-    if rank_hat == 0:# or (rank != 0 and np.abs(rank_hat - rank) >= 3):
+    if rank_hat == 0:  # or (rank != 0 and np.abs(rank_hat - rank) >= 3):
         return _sample_svd(s, rank=rank)
-    return sampled_idx
+    return sampled_idx, torch.Tensor(sample_probs)
 
 
 def encode(grad, compress=True, svd_rank=0, random_sample=True):
-    grad = grad + 1e-7*torch.randn(*grad.size()).cuda()
+    #  warnings.warn('max |grad| = {}'.format(torch.abs(grad).max()))
+    #  grad = grad + 1e-4*torch.randn(*grad.size()).cuda()
     if not compress:
         size = list(grad.size())
         return {'grad': grad, 'encode': False}
@@ -44,23 +51,26 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True):
         reshaped_flag = True
 
     if ndims == 2:
-        u, s, v = torch.svd(grad, some=True)
-
+        try:
+            u, s, v = torch.svd(grad, some=True)
+        except:
+            sys.exit(0)
         if random_sample:
-            i = _sample_svd(s, rank=svd_rank)
+            i, probs = _sample_svd(s, rank=svd_rank)
             i = torch.LongTensor(i)
             if torch.cuda.is_available():
                 i = i.cuda()
+                probs = probs.cuda()
             u = u[:, i]
-            s = s[i]
+            s = s[i] / probs
             v = v[:, i]
-        else:
+        elif svd_rank >= 0:
             u = u[:, :svd_rank]
             s = s[:svd_rank]
             v = v[:, :svd_rank]
 
         return {'u': u, 's': s, 'v': v, 'orig_size': orig_size,
-                'reshaped': reshaped_flag, 'encode': True}
+                'reshaped': reshaped_flag, 'encode': True, 'rank': svd_rank}
     return {'grad': grad, 'encode': False}
 
 
@@ -70,8 +80,6 @@ def decode(encode_output, rescale=True):
         return encode_output['grad']
 
     u, s, v = (encode_output[key] for key in ['u', 's', 'v'])
-    if rescale:
-        s = s[0] / s
     grad_approx = u @ torch.diag(s) @ v.t()
     if encode_output.get('reshaped', False):
         grad_approx = grad_approx.view(encode_output['orig_size'])
