@@ -20,7 +20,7 @@ def _resize_to_2d(x):
 
 def _sample_svd(s, rank=0):
     if s[0] < 1e-6:
-        return s[0], torch.Tensor([1.0])
+        return [0], torch.Tensor([1.0])
     probs = s / s[0] if rank == 0 else rank * s / s.sum()
     sampled_idx = []
     sample_probs = []
@@ -74,7 +74,7 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True):
     return {'grad': grad, 'encode': False}
 
 
-def decode(encode_output, rescale=True):
+def decode(encode_output):
     encode = encode_output.get('encode', False)
     if not encode:
         return encode_output['grad']

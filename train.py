@@ -23,9 +23,14 @@ import random
 from warnings import warn
 from torch.multiprocessing import Process
 import random
+from datetime import datetime
 
 from wideresnet import WideResNet
-from datetime import datetime
+
+from pytorch_ps_mpi import MPI_PS
+import svd_comms
+import qsgd
+
 today_datetime = datetime.now().isoformat()[:10]
 today = '2017-12-04'
 if today != today_datetime:
@@ -77,11 +82,13 @@ parser.add_argument('--svd_rescale', default=1,
 parser.add_argument('--svd_rank', default=0, help='Boolean int: compress or not',
                     type=int)
 parser.add_argument('--device', default=0, help='Which GPU to use', type=int)
+parser.add_argument('--qsgd', default=0, type=int, help='Use QSGD?')
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
 args.use_cuda = use_cuda
 args.compress = bool(args.compress)
+args.qsgd = bool(args.qsgd)
 args.svd_rescale = bool(args.svd_rescale)
 print("args.compress ==", args.compress)
 
@@ -217,16 +224,20 @@ def main():
                               #  weight_decay=args.weight_decay)
     #  optimizer = torch.optim.ASGD(model.parameters(), args.lr)
     #  from distributed_opt import MiniBatchSGD
-    from pytorch_ps_mpi import MPI_PS
-    import svd_comms
     #  import torch.distributed as dist
     #  rank = np.random.choice('gloo')
     print('initing MiniBatchSGD')
-    print(list(model.parameters())[6].view(-1)[:5])
-    optimizer = MPI_PS(model.parameters(), args.lr, compress=args.compress,
-                       encode=svd_comms.encode, decode=svd_comms.decode,
-                       rescale=args.svd_rescale, svd_rank=args.svd_rank)
-    print('starting iterations')
+    print(list(model.parameters())[6].view(-1)[:3])
+    if not args.qsgd:
+        encode_kwargs = {'random_sample': args.svd_rescale,
+                         'svd_rank': args.svd_rank, 'compress': args.compress}
+        coding = {'encode': svd_comms.encode, 'decode': svd_comms.decode}
+    else:
+        encode_kwargs = {}
+        coding = {'encode': qsgd.encode, 'decode': qsgd.decode}
+
+    optimizer = MPI_PS(model.parameters(), args.lr, encode_kwargs=encode_kwargs,
+                       **coding)
 
     data = []
     train_time = 0
