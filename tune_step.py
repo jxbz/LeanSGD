@@ -112,19 +112,23 @@ if __name__ == "__main__":
     #  print(len(hist))
     #  sys.exit(0)
     #  client = Client(LocalCluster(n_workers=4))
-    ip = '172.31.36.170:8786'
+    ip = '172.31.13.113:8786'
     client = Client(ip)
     #  client = Client()
     #  client = Client()
     #  client = None
-    args = ['--compress=0']
-    args += [f'--compress=1 --svd_rank={rank} --svd_rescale={rescale}'
-             for rank in [1, 2, 4, 8] for rescale in [0, 1]]
-    args += ['--compress=1 --svd_rank=0 --svd_rescale=1']
-    args += ['--compress=1 --svd_rank=-1 --svd_rescale=0']
+    #  args = ['--compress=0']
+    #  args += [f'--compress=1 --svd_rank={rank} --svd_rescale={rescale}'
+             #  for rank in [1, 2, 4, 8] for rescale in [0, 1]]
+    #  args += ['--compress=1 --svd_rank=0 --svd_rescale=1']
+    #  args += ['--compress=1 --svd_rank=-1 --svd_rescale=0']
+    args = ['--compress=0']#, '--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1']
+    args = [arg + f' --use_mpi={use_mpi}'
+            for use_mpi in [0, 1] for arg in args]
+
     print(f"running len(args) = {len(args)} jobs")
 
-    layers = 100
+    layers = 34
     n_workers = 1
     home = '/home/ec2-user'
     cmd = (f'mpirun -n {n_workers} sudo {home}/anaconda3/bin/python '
@@ -139,7 +143,8 @@ if __name__ == "__main__":
         kwargs = {'cmd': run}
 
         space = [10**i for i in [-2, -1, 0]]
-        jobs += [client.submit(find_step_size, macc, space, **kwargs)]
+        #  jobs += [client.submit(find_step_size, macc, space, **kwargs)]
+        jobs += [client.submit(macc, 0.1, **kwargs)]
         cmds += [run]
         #  x_hat, history = find_step_size(macc, space, client=client, **kwargs)
     output = client.gather(jobs)

@@ -32,7 +32,7 @@ import svd_comms
 import qsgd
 
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-12-04'
+today = '2017-12-06'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -83,12 +83,14 @@ parser.add_argument('--svd_rank', default=0, help='Boolean int: compress or not'
                     type=int)
 parser.add_argument('--device', default=0, help='Which GPU to use', type=int)
 parser.add_argument('--qsgd', default=0, type=int, help='Use QSGD?')
+parser.add_argument('--use_mpi', default=1, type=int, help='Use MPI?')
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
 args.use_cuda = use_cuda
 args.compress = bool(args.compress)
 args.qsgd = bool(args.qsgd)
+args.use_mpi = bool(args.use_mpi)
 args.svd_rescale = bool(args.svd_rescale)
 print("args.compress ==", args.compress)
 
@@ -236,10 +238,15 @@ def main():
         encode_kwargs = {}
         coding = {'encode': qsgd.encode, 'decode': qsgd.decode}
 
-    optimizer = MPI_PS(model.parameters(), args.lr, encode_kwargs=encode_kwargs,
-                       **coding)
+    #  import ipdb as pdb
+    #  pdb.set_trace()
+    names = [n for n, p in model.named_parameters()]
+    assert len(names) == len(set(names))
+    optimizer = MPI_PS(model.parameters(), args.lr, encode_kwargs=encode_kwargs, names=names,
+                       use_mpi=args.use_mpi, **coding)
 
     data = []
+    train_data = []
     train_time = 0
     for epoch in range(args.start_epoch, args.epochs + 1):
         print(f"epoch {epoch}")
@@ -248,16 +255,16 @@ def main():
         # train for one epoch
         start = time.time()
         if epoch > 0:
-            train_data = train(train_loader, model, criterion, optimizer, epoch)
+            train_d = train(train_loader, model, criterion, optimizer, epoch)
         else:
-            train_data = []
+            train_d = []
         train_time += time.time() - start
+        train_data += [dict(datum, **vars(args)) for datum in train_d]
 
         # evaluate on validation set
         datum = validate(val_loader, model, criterion, epoch)
         data += [{'train_time': train_time,
                   'epoch': epoch + 1, **vars(args), **datum}]
-        data[-1]['train_data'] = train_data
         if epoch > 0:
             data[-1]['epoch_train_time'] = data[-1]['train_time'] - data[-2]['train_time']
             for key in train_data[-1]:
@@ -268,10 +275,12 @@ def main():
                     data[-1]["epoch_" + key] = values[0]
 
         df = pd.DataFrame(data)
+        train_df = pd.DataFrame(train_data)
         ids = [str(getattr(args, key))
                for key in ['layers', 'lr', 'batch_size', 'compress', 'seed',
-                           'num_workers', 'svd_rank', 'svd_rescale']]
+                           'num_workers', 'svd_rank', 'svd_rescale', 'use_mpi']]
         _write_csv(df, id=f'-'.join(ids))
+        _write_csv(train_df, id=f'-'.join(ids) + '_train')
         pprint({k: v for k, v in data[-1].items()
                 if k in ['train_time', 'num_workers', 'loss_test',
                          'acc_test', 'epoch'] or 'time' in k})
