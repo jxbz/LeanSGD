@@ -8,15 +8,13 @@ def encode(v):
     norm = torch.norm(v)
     w = v.view(-1)
 
-    signs = torch.sign(w)
+    signs = torch.sign(w).int()
     probs = torch.abs(w) / norm
-    probs = probs.numpy()
-
-    #  mask = torch.distributions.Bernoulli(probs)  # on master, not 0.2
-    mask = stats.bernoulli.rvs(probs)
-    mask = torch.Tensor(mask.astype('float32')).byte()
-
+    mask = torch.distributions.Bernoulli(probs).sample().byte()
     idx = torch.arange(0, len(w))
+    if torch.cuda.is_available():
+        idx = idx.cuda()
+
     selected = torch.masked_select(idx, mask).long()
     signs = torch.masked_select(signs, mask)
     return {'signs': signs, 'size': v.size(), 'selected': selected,
@@ -25,8 +23,11 @@ def encode(v):
 
 def decode(code):
     v = torch.zeros(code['size'])
+    if torch.cuda.is_available():
+        v = v.cuda()
     flat = v.view(-1)
-    flat[code['selected']] = code['norm'] * code['signs']
+    if len(code['selected']) > 0:
+        flat[code['selected']] = code['norm'] * code['signs'].float()
     return v
 
 if __name__ == "__main__":
