@@ -34,12 +34,12 @@ def _sample_svd(s, rank=0):
     return sampled_idx, torch.Tensor(sample_probs)
 
 
-def encode(grad, compress=True, svd_rank=0, random_sample=True):
-    #  warnings.warn('max |grad| = {}'.format(torch.abs(grad).max()))
-    #  grad = grad + 1e-4*torch.randn(*grad.size()).cuda()
+def encode(grad, compress=True, svd_rank=0, random_sample=True, **kwargs):
+    # move to CPU; torch's SVD is 5x faster on CPU
     if not compress:
         size = list(grad.size())
         return {'grad': grad, 'encode': False}
+    grad = grad.cpu()
 
     orig_size = list(grad.size())
     ndims = len(grad.size())
@@ -51,14 +51,11 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True):
         reshaped_flag = True
 
     if ndims == 2:
-        try:
-            u, s, v = torch.svd(grad, some=True)
-        except:
-            sys.exit(0)
+        u, s, v = torch.svd(grad, some=True)
         if random_sample:
             i, probs = _sample_svd(s, rank=svd_rank)
             i = torch.LongTensor(i)
-            if torch.cuda.is_available():
+            if s.is_cuda:
                 i = i.cuda()
                 probs = probs.cuda()
             u = u[:, i]
@@ -74,13 +71,18 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True):
     return {'grad': grad, 'encode': False}
 
 
-def decode(encode_output):
+def decode(encode_output, cuda=False):
     encode = encode_output.get('encode', False)
     if not encode:
-        return encode_output['grad']
+        grad = encode_output['grad']
+        if cuda:
+            grad = grad.cuda()
+        return grad
 
     u, s, v = (encode_output[key] for key in ['u', 's', 'v'])
     grad_approx = u @ torch.diag(s) @ v.t()
     if encode_output.get('reshaped', False):
         grad_approx = grad_approx.view(encode_output['orig_size'])
+    if cuda:
+        grad_approx = grad_approx.cuda()
     return grad_approx

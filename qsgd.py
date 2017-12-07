@@ -4,7 +4,7 @@ from scipy import stats
 import torch
 
 
-def encode(v):
+def encode(v, **kwargs):
     norm = torch.norm(v)
     w = v.view(-1)
 
@@ -12,8 +12,9 @@ def encode(v):
     probs = torch.abs(w) / norm
     mask = torch.distributions.Bernoulli(probs).sample().byte()
     idx = torch.arange(0, len(w))
-    if torch.cuda.is_available():
+    if v.is_cuda:
         idx = idx.cuda()
+        mask = mask.cuda()
 
     selected = torch.masked_select(idx, mask).long()
     signs = torch.masked_select(signs, mask)
@@ -21,13 +22,15 @@ def encode(v):
             'norm': norm}
 
 
-def decode(code):
+def decode(code, cuda=False):
     v = torch.zeros(code['size'])
-    if torch.cuda.is_available():
+    signs = code['signs']
+    if cuda:
         v = v.cuda()
+        signs = signs.cuda()
     flat = v.view(-1)
     if len(code['selected']) > 0:
-        flat[code['selected']] = code['norm'] * code['signs'].float()
+        flat[code['selected']] = code['norm'] * signs.float()
     return v
 
 if __name__ == "__main__":
