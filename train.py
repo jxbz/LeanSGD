@@ -219,7 +219,7 @@ def main():
     # define loss function (criterion) and optimizer
 
     criterion = nn.CrossEntropyLoss()
-    if use_cuda:
+    if args.use_cuda:
         criterion = criterion.cuda()
     #  optimizer = torch.optim.SGD(model.parameters(), args.lr,
                               #  momentum=args.momentum, nesterov=args.nesterov,
@@ -243,7 +243,7 @@ def main():
     names = [n for n, p in model.named_parameters()]
     assert len(names) == len(set(names))
     optimizer = MPI_PS(model.parameters(), args.lr, encode_kwargs=encode_kwargs, names=names,
-                       use_mpi=args.use_mpi, **coding)
+                       use_mpi=args.use_mpi, cuda=args.use_cuda, **coding)
 
     data = []
     train_data = []
@@ -310,7 +310,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
     comm_data = []
     start = time.time()
     for i, (input, target) in pbar:
-        if use_cuda:
+        if i > 3:
+            break
+        if args.use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
         print(i)
