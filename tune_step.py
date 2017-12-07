@@ -112,7 +112,7 @@ if __name__ == "__main__":
     #  print(len(hist))
     #  sys.exit(0)
     #  client = Client(LocalCluster(n_workers=4))
-    ip = '172.31.13.113:8786'
+    ip = '172.31.10.71:8786'
     client = Client(ip)
     #  client = Client()
     #  client = Client()
@@ -122,7 +122,7 @@ if __name__ == "__main__":
              #  for rank in [1, 2, 4, 8] for rescale in [0, 1]]
     #  args += ['--compress=1 --svd_rank=0 --svd_rescale=1']
     #  args += ['--compress=1 --svd_rank=-1 --svd_rescale=0']
-    args = ['--compress=0']#, '--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1']
+    args = ['--compress=0', '--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1']
     args = [arg + f' --use_mpi={use_mpi}'
             for use_mpi in [0, 1] for arg in args]
 
@@ -148,10 +148,4 @@ if __name__ == "__main__":
         cmds += [run]
         #  x_hat, history = find_step_size(macc, space, client=client, **kwargs)
     output = client.gather(jobs)
-    for run, (x_hat, history) in zip(cmds, output):
-        print(f"{run} found stepsize_est = {x_hat} with history = {history}")
-
-        uid = run.replace(' ', '')
-        with open('output/2017-11-31/' + uid + '.pkl', 'wb') as f:
-            pickle.dump({'stepsize_est': x_hat, 'cmd': run,
-                         'history': history}, f)
+    print("Done with all jobs")

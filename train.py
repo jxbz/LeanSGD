@@ -32,7 +32,7 @@ import svd_comms
 import qsgd
 
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-12-06'
+today = '2017-12-07'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -276,9 +276,9 @@ def main():
 
         df = pd.DataFrame(data)
         train_df = pd.DataFrame(train_data)
-        ids = [str(getattr(args, key))
-               for key in ['layers', 'lr', 'batch_size', 'compress', 'seed',
-                           'num_workers', 'svd_rank', 'svd_rescale', 'use_mpi']]
+        ids = [str(getattr(args, key)) for key in
+               ['layers', 'lr', 'batch_size', 'compress', 'seed', 'num_workers',
+                'svd_rank', 'svd_rescale', 'use_mpi', 'qsgd']]
         _write_csv(df, id=f'-'.join(ids))
         _write_csv(train_df, id=f'-'.join(ids) + '_train')
         pprint({k: v for k, v in data[-1].items()
@@ -310,8 +310,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
     comm_data = []
     start = time.time()
     for i, (input, target) in pbar:
-        if i > 3:
-            break
         if args.use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
