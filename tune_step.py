@@ -6,31 +6,27 @@ import numpy as np
 from distributed import Client, LocalCluster
 import dask
 import distributed
+import pandas as pd
 from mpi4py import MPI
 from multiprocessing import Pool
 from scipy.optimize import curve_fit
 from pprint import pprint
+from distributed import worker_client
 
 
-# TODO
-# - get dask (or some parallelism) working
-# - launch on cluster
+def _find_lowest_loss(lines):
+    losses_str = filter(lambda line: 'min_train_loss' in line, lines)
+    losses = map(lambda line: {'loss': float(line.split(' ')[1]),
+                               'step': int(line.split(' ')[2])}, losses_str)
+    df = pd.DataFrame(list(losses)).groupby(by='step').mean()
+    avg_loss = df.to_dict()['loss']
 
-def map(f, args, **kwargs):
-    client = Client()
-    result = client.map(f, args, **kwargs)
-    client.gather(result)
-    return result
-
-
-def _find_best_acc(lines):
-    for line in reversed(lines):
-        if 'best accuracy' in line.lower():
-            return float(line.split()[-1])
-    raise Exception('best accuracy not found in these lines')
+    if len(avg_loss) == 0:
+        raise Exception('min_train_loss not found in these lines')
+    return min(v for _, v in avg_loss.items())
 
 
-def macc(stepsize, cmd=''):
+def loss(stepsize, cmd=''):
     #  return (stepsize - 0.1)**2
     run = cmd.format(lr=stepsize)
     print("About to run this command:")
@@ -40,46 +36,42 @@ def macc(stepsize, cmd=''):
     lines = out.split(b'\n')
     lines = [l.decode() for l in lines]
     try:
-        _acc = _find_best_acc(lines)
+        _loss = _find_lowest_loss(lines)
     except Exception:
-        _acc = 0.0
-    print('stepsize={:0.4f}, acc={}'.format(stepsize, _acc))
-    return -1 * _acc
+        _loss = np.inf
+    print('stepsize={:0.4f}, loss={}'.format(stepsize, _loss))
+    return _loss
 
 
-def find_step_size(macc, space, k=0, history=None, get_client=False, ip=None,
+def find_step_size(f, space, k=0, history=None, get_client=False, ip=None,
                    **kwargs):
     if history is None:
         history = {}
-    if get_client and ip:
+    if get_client:
         print(f"Trying to connect to {ip}")
-        client = distributed.get_client(address=ip)
         jobs = []
         params = []
-        for param in space:
-            if param not in history:
-                jobs += [dask.compute(dask.delayed(macc), param, **kwargs)]
-                #  jobs += [client.submit(macc, param, **kwargs)]
-                params += [param]
-        #  output = [job.result() for job in jobs]
-        #  distributed.secede()
-        output = client.gather(jobs)
-        #  distributed.rejoin()
+        with worker_client() as client:
+            for param in space:
+                if param not in history:
+                    jobs += [client.submit(f, param, **kwargs)]
+                    params += [param]
+            output = client.gather(jobs)
         for _k, _v in zip(params, output):
             history[_k] = _v
     else:
         for param in space:
             if param not in history:
-                history[param] = macc(param, **kwargs)
+                history[param] = f(param, **kwargs)
 
     optimal = min(history, key=history.get)
     if k == 3:
         return optimal, history
-    rand = np.random.rand
+    rand = np.random.rand() / 4
     factor = 10 / (k + 1)
-    new_space = np.logspace(np.log10(optimal/factor) - rand() / 4,
-                            np.log10(optimal*factor) + rand() / 4, num=4)
-    return find_step_size(macc, new_space, k=k + 1, history=history,
+    new_space = np.logspace(np.log10(optimal/factor) - rand,
+                            np.log10(optimal*factor) + rand, num=4)
+    return find_step_size(f, new_space, k=k + 1, history=history,
                           get_client=get_client, **kwargs)
 
 
@@ -111,20 +103,14 @@ if __name__ == "__main__":
     #  pprint(sorted(list(hist.keys())))
     #  print(len(hist))
     #  sys.exit(0)
-    #  client = Client(LocalCluster(n_workers=4))
-    ip = '172.31.10.71:8786'
-    client = Client(ip)
-    #  client = Client()
-    #  client = Client()
+    #  ip = '172.31.5.20:8786'
+    #  client = Client(ip)
+    client = Client()
     #  client = None
-    #  args = ['--compress=0']
-    #  args += [f'--compress=1 --svd_rank={rank} --svd_rescale={rescale}'
-             #  for rank in [1, 2, 4, 8] for rescale in [0, 1]]
-    #  args += ['--compress=1 --svd_rank=0 --svd_rescale=1']
-    #  args += ['--compress=1 --svd_rank=-1 --svd_rescale=0']
     args = ['--compress=0', '--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1']
     args = [arg + f' --use_mpi={use_mpi}'
             for use_mpi in [0, 1] for arg in args]
+    args = ['--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1', ' ']
 
     print(f"running len(args) = {len(args)} jobs")
 
@@ -143,8 +129,8 @@ if __name__ == "__main__":
         kwargs = {'cmd': run}
 
         space = [10**i for i in [-2, -1, 0]]
-        #  jobs += [client.submit(find_step_size, macc, space, **kwargs)]
-        jobs += [client.submit(macc, 0.1, **kwargs)]
+        jobs += [client.submit(find_step_size, loss, space, **kwargs)]
+        #  jobs += [client.submit(macc, 0.1, **kwargs)]
         cmds += [run]
         #  x_hat, history = find_step_size(macc, space, client=client, **kwargs)
     output = client.gather(jobs)
