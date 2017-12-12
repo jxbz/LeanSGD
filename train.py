@@ -23,6 +23,7 @@ import random
 from warnings import warn
 from torch.multiprocessing import Process
 import random
+from functools import partial
 from datetime import datetime
 
 from wideresnet import WideResNet
@@ -32,7 +33,7 @@ import svd_comms
 import qsgd
 
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-12-07'
+today = '2017-12-08'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -238,11 +239,9 @@ def main():
         encode_kwargs = {}
         coding = {'encode': qsgd.encode, 'decode': qsgd.decode}
 
-    #  import ipdb as pdb
-    #  pdb.set_trace()
     names = [n for n, p in model.named_parameters()]
     assert len(names) == len(set(names))
-    optimizer = MPI_PS(model.parameters(), args.lr, encode_kwargs=encode_kwargs, names=names,
+    optimizer = MPI_PS(model.named_parameters(), model.parameters(), args.lr, encode_kwargs=encode_kwargs, names=names,
                        use_mpi=args.use_mpi, cuda=args.use_cuda, **coding)
 
     data = []
@@ -276,6 +275,10 @@ def main():
 
         df = pd.DataFrame(data)
         train_df = pd.DataFrame(train_data)
+        if len(train_df) > 0:
+            i = train_df.loss_train.argmin()
+            items = [train_df.iloc[i][key] for key in ['loss_train', 'step']]
+            print('min_train_loss', ' '.join([str(x) for x in items]))
         ids = [str(getattr(args, key)) for key in
                ['layers', 'lr', 'batch_size', 'compress', 'seed', 'num_workers',
                 'svd_rank', 'svd_rescale', 'use_mpi', 'qsgd']]
@@ -328,7 +331,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
+        loss_start = time.time()
         loss.backward()
+        loss_datum = {'grad_compute_time': time.time() - loss_start}
+
         r = optimizer.step()
         if r is not None:
             _, comm_datum = r
@@ -336,7 +342,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             comm_datum = {}
         comm_data += [{'loss_train_avg': losses.avg, 'loss_train': losses.val,
                        'acc_train_avg': top1.avg,   'acc_train': top1.val,
-                       **comm_datum}]
+                       **comm_datum, **loss_datum}]
 
         # measure elapsed time
         batch_time.update(time.time() - end)

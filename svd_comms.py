@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import warnings
 import sys
+import time
 
 
 def _resize_to_2d(x):
@@ -38,8 +39,10 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True, **kwargs):
     # move to CPU; torch's SVD is 5x faster on CPU
     if not compress:
         size = list(grad.size())
-        return {'grad': grad, 'encode': False}
-    grad = grad.cpu()
+        return {'grad': grad, 'encode': False}, {}
+    t = [time.time()]
+    #  grad = grad.cpu()
+    t += [time.time()]
 
     orig_size = list(grad.size())
     ndims = len(grad.size())
@@ -49,9 +52,14 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True, **kwargs):
         size = list(grad.size())
         ndims = len(size)
         reshaped_flag = True
+    t += [time.time()]
+    data = {'reshape_time': t[-1] - t[-2], 'cpu_time': t[1] - t[0]}
 
+    data.update({'random_sample_time': 0, 'svd_time': 0})
     if ndims == 2:
+        t += [time.time()]
         u, s, v = torch.svd(grad, some=True)
+        t += [time.time()]
         if random_sample:
             i, probs = _sample_svd(s, rank=svd_rank)
             i = torch.LongTensor(i)
@@ -65,10 +73,14 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True, **kwargs):
             u = u[:, :svd_rank]
             s = s[:svd_rank]
             v = v[:, :svd_rank]
+        t += [time.time()]
+        data.update({'random_sample_time': t[-1] - t[-2],
+                     'svd_time': t[-2] - t[-3]})
 
         return {'u': u, 's': s, 'v': v, 'orig_size': orig_size,
-                'reshaped': reshaped_flag, 'encode': True, 'rank': svd_rank}
-    return {'grad': grad, 'encode': False}
+                'reshaped': reshaped_flag, 'encode': True,
+                'rank': svd_rank}, data
+    return {'grad': grad, 'encode': False}, data
 
 
 def decode(encode_output, cuda=False):
