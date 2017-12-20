@@ -8,8 +8,22 @@ python train.py --dataset cifar100 --layers 40 --widen-factor 4
 
 # Distributed training
 ``` shell
-mpiexec -n 3 -hostfile hosts --map-by ppr:1:node python train.py
+mpirun -n 3 -hostfile hosts --map-by ppr:1:node python train.py
 ```
+
+A quick speed test with 2 p2.xlarges and 34 layers:
+
+* qsgd: 1.33it/s (with the 1 bit compression)
+* normal: 2.33it/s (no compression)
+* svd: 1.77it/s (theoretically sound compression)
+
+And with 100 layers:
+
+* svd: 1.65s/it
+* norm: 1.36s/it
+* qsgd: 2.22s/it
+
+How will this change as the number of workers increase?
 
 ## Async comms
 ``` python

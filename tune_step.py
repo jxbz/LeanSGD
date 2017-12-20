@@ -12,6 +12,7 @@ from multiprocessing import Pool
 from scipy.optimize import curve_fit
 from pprint import pprint
 from distributed import worker_client
+from distributed import get_client, secede, rejoin
 
 
 def _find_lowest_loss(lines):
@@ -28,10 +29,15 @@ def _find_lowest_loss(lines):
 
 def loss(stepsize, cmd=''):
     #  return (stepsize - 0.1)**2
+    #  run = cmd + ''
     run = cmd.format(lr=stepsize)
     print("About to run this command:")
     print(run)
-    out = subprocess.check_output(run.split(' '))
+    try:
+        out = subprocess.check_output(run.split(' '))
+    except:
+        print(run)
+        raise
     print("Done with check_output")
     lines = out.split(b'\n')
     lines = [l.decode() for l in lines]
@@ -43,20 +49,23 @@ def loss(stepsize, cmd=''):
     return _loss
 
 
-def find_step_size(f, space, k=0, history=None, get_client=False, ip=None,
+def find_step_size(f, space, k=0, history=None, dask=True,
+                   get_client_=False, ip=None,
                    **kwargs):
     if history is None:
         history = {}
-    if get_client:
-        print(f"Trying to connect to {ip}")
+    if get_client_:
+        print(f"Trying get_client()")
         jobs = []
         params = []
-        with worker_client() as client:
-            for param in space:
-                if param not in history:
-                    jobs += [client.submit(f, param, **kwargs)]
-                    params += [param]
-            output = client.gather(jobs)
+        client = get_client()
+        for param in space:
+            if param not in history:
+                jobs += [client.submit(f, param, **kwargs)]
+                params += [param]
+        secede()
+        output = client.gather(jobs)
+        rejoin()
         for _k, _v in zip(params, output):
             history[_k] = _v
     else:
@@ -72,7 +81,7 @@ def find_step_size(f, space, k=0, history=None, get_client=False, ip=None,
     new_space = np.logspace(np.log10(optimal/factor) - rand,
                             np.log10(optimal*factor) + rand, num=4)
     return find_step_size(f, new_space, k=k + 1, history=history,
-                          get_client=get_client, **kwargs)
+                          get_client_=get_client_, **kwargs)
 
 
 def test_find_step_size():
@@ -103,35 +112,41 @@ if __name__ == "__main__":
     #  pprint(sorted(list(hist.keys())))
     #  print(len(hist))
     #  sys.exit(0)
-    #  ip = '172.31.5.20:8786'
-    #  client = Client(ip)
-    client = Client()
+    ip = '172.31.13.19:8786'
+    client = Client(ip)
+    #  client = Client()
     #  client = None
-    args = ['--compress=0', '--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1']
-    args = [arg + f' --use_mpi={use_mpi}'
-            for use_mpi in [0, 1] for arg in args]
-    args = ['--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1', ' ']
+    #  args = ['--compress=0', '--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1']
+    #  args = [arg + f' --use_mpi={use_mpi}'
+            #  for use_mpi in [0, 1] for arg in args]
+    args = ['--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1',
+            '--compress=0']
+    args += [f'--compress=1 --svd_rank={rank} --svd_rescale={rescale}'
+             for rank in [2, 4, 8] for rescale in [0, 1]]
+    #  args = ['--compress=1 --svd_rank=0 --svd_rescale=1']
 
-    print(f"running len(args) = {len(args)} jobs")
+    print(f"running len(args) = {len(args)} jobs (each jobs spawns more adaptively)")
 
-    layers = 34
-    n_workers = 1
+    layers = 94
+    n_worker = 1
     home = '/home/ec2-user'
-    cmd = (f'mpirun -n {n_workers} sudo {home}/anaconda3/bin/python '
+    pre = 'mpirun -n 1'
+    cmd = (f'sudo {home}/anaconda3/bin/python '
            f'{home}/WideResNet-pytorch/train.py --layers={layers} '
-           '--lr={lr} --epochs=6 --num_workers=1 '
+           '--epochs=4 --num_workers=1 '
            '--nesterov=0 --weight-decay=0 --momentum=0')
-    cmds = []
+    cmds = [pre + ' ' + cmd + ' ' + arg for arg in args]
+    cmds = [cmd + ' --lr={lr}' for cmd in cmds]
+    print(cmds)
+    #  cmds = []
     jobs = []
-    for arg in args:
-        run = cmd + ' ' + arg
+    for run in cmds:
         print(run)
-        kwargs = {'cmd': run}
+        kwargs = {'cmd': run, 'get_client_': True}
 
         space = [10**i for i in [-2, -1, 0]]
         jobs += [client.submit(find_step_size, loss, space, **kwargs)]
-        #  jobs += [client.submit(macc, 0.1, **kwargs)]
-        cmds += [run]
+        #  jobs += [client.submit(loss, 0.1, **kwargs)]
         #  x_hat, history = find_step_size(macc, space, client=client, **kwargs)
     output = client.gather(jobs)
     print("Done with all jobs")

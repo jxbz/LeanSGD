@@ -33,7 +33,7 @@ import svd_comms
 import qsgd
 
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-12-08'
+today = '2017-12-19'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -174,6 +174,7 @@ def main():
                        args.widen_factor, dropRate=args.droprate)
 
     rank = MPI.COMM_WORLD.Get_rank()
+    args.rank = rank
     args.seed += rank
     _set_seed(args.seed)
 
@@ -262,7 +263,10 @@ def main():
 
         # evaluate on validation set
         datum = validate(val_loader, model, criterion, epoch)
+        train_datum = validate(train_loader, model, criterion, epoch)
         data += [{'train_time': train_time,
+                  'whole_train_acc': train_datum['acc_test'],
+                  'whole_train_loss': train_datum['loss_test'],
                   'epoch': epoch + 1, **vars(args), **datum}]
         if epoch > 0:
             data[-1]['epoch_train_time'] = data[-1]['train_time'] - data[-2]['train_time']
@@ -275,13 +279,15 @@ def main():
 
         df = pd.DataFrame(data)
         train_df = pd.DataFrame(train_data)
-        if len(train_df) > 0:
-            i = train_df.loss_train.argmin()
-            items = [train_df.iloc[i][key] for key in ['loss_train', 'step']]
-            print('min_train_loss', ' '.join([str(x) for x in items]))
+        #  whole_train = {'acc_train'}
+        if True:
+            time.sleep(1)
+            print('\n\nmin_train_loss', train_datum['loss_test'],
+                  train_datum['acc_test'], '\n\n')
+            time.sleep(1)
         ids = [str(getattr(args, key)) for key in
                ['layers', 'lr', 'batch_size', 'compress', 'seed', 'num_workers',
-                'svd_rank', 'svd_rescale', 'use_mpi', 'qsgd']]
+                'svd_rank', 'svd_rescale', 'use_mpi', 'qsgd', 'world_size', 'rank']]
         _write_csv(df, id=f'-'.join(ids))
         _write_csv(train_df, id=f'-'.join(ids) + '_train')
         pprint({k: v for k, v in data[-1].items()
