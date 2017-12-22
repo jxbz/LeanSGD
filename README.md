@@ -6,6 +6,19 @@ Example:
 python train.py --dataset cifar100 --layers 40 --widen-factor 4
 ```
 
+# How to generate results
+
+The script `run.py` will run `train.py` and write summary CSVs into
+`output/{today`. The `run.py` script runs the commands
+
+``` python
+python train.py --qsgd=1  # use QSGD coding
+python train.py --compress=1 --svd_rank=0 --svd_rescale=1  # use SVD coding
+python train.py --compress=0  # use normal SGD with the param server
+```
+
+Note that extra arguments are added to each of these commands.
+
 # Distributed training
 ``` shell
 mpirun -n 3 -hostfile hosts --map-by ppr:1:node python train.py

@@ -291,8 +291,10 @@ def main():
         _write_csv(df, id=f'-'.join(ids))
         _write_csv(train_df, id=f'-'.join(ids) + '_train')
         pprint({k: v for k, v in data[-1].items()
+                if k in ['svd_rank', 'svd_rescale', 'qsgd', 'compress']})
+        pprint({k: v for k, v in data[-1].items()
                 if k in ['train_time', 'num_workers', 'loss_test',
-                         'acc_test', 'epoch'] or 'time' in k})
+                         'acc_test', 'epoch', 'compress', 'svd_rank', 'qsgd'] or 'time' in k})
         prec1 = datum['acc_test']
 
         # remember best prec@1 and save checkpoint
@@ -322,6 +324,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if args.use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
+        if i > 50e3 / 1024:
+            break
         print(i)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
