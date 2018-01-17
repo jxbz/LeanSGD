@@ -39,7 +39,7 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True, **kwargs):
     # move to CPU; torch's SVD is 5x faster on CPU
     if not compress:
         size = list(grad.size())
-        return {'grad': grad, 'encode': False}, {}
+        return {'grad': grad, 'encode': False}#, {}
     t = [time.time()]
     #  grad = grad.cpu()
     t += [time.time()]
@@ -78,12 +78,14 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True, **kwargs):
                      'svd_time': t[-2] - t[-3]})
 
         return {'u': u, 's': s, 'v': v, 'orig_size': orig_size,
-                'reshaped': reshaped_flag, 'encode': True,
-                'rank': svd_rank}, data
-    return {'grad': grad, 'encode': False}, data
+               'reshaped': reshaped_flag, 'encode': True,
+               'rank': svd_rank}#, data
+    return {'grad': grad, 'encode': False}#, data
 
 
 def decode(encode_output, cuda=False):
+    if isinstance(encode_output, tuple) and len(encode_output) == 1:
+        encode_output = encode_output[0]
     encode = encode_output.get('encode', False)
     if not encode:
         grad = encode_output['grad']

@@ -5,6 +5,7 @@ import sys
 import shutil
 import time
 from tqdm import tqdm
+from pprint import pprint
 
 import torch
 import torch.nn as nn
@@ -94,6 +95,7 @@ args.qsgd = bool(args.qsgd)
 args.use_mpi = bool(args.use_mpi)
 args.svd_rescale = bool(args.svd_rescale)
 print("args.compress ==", args.compress)
+print("args.use_cuda ==", args.use_cuda)
 
 
 def _set_visible_gpus(num_gpus, device=None, verbose=True):
@@ -254,7 +256,7 @@ def main():
 
         # train for one epoch
         start = time.time()
-        if epoch > 0:
+        if epoch >= 0:
             train_d = train(train_loader, model, criterion, optimizer, epoch)
         else:
             train_d = []
@@ -350,6 +352,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             _, comm_datum = r
         else:
             comm_datum = {}
+        pprint({**comm_datum, **loss_datum})
         comm_data += [{'loss_train_avg': losses.avg, 'loss_train': losses.val,
                        'acc_train_avg': top1.avg,   'acc_train': top1.val,
                        **comm_datum, **loss_datum}]

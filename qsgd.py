@@ -27,18 +27,20 @@ def encode(v, **kwargs):
     data = {'masking_time': t[-1] - t[-2], 'gen_mask_time': t[1] - t[0],
             'to_gpu_time': t[-2] - t[-3]}
     return {'signs': signs, 'size': v.size(), 'selected': selected,
-            'norm': norm}, data
+            'norm': norm}#, data
 
 
 def decode(code, cuda=False):
     v = torch.zeros(code['size'])
     signs = code['signs']
+    print("QSGD cuda =", cuda)
     if cuda:
         v = v.cuda()
         signs = signs.cuda()
     flat = v.view(-1)
     if len(code['selected']) > 0:
-        flat[code['selected']] = code['norm'] * signs.float()
+        r = code['norm'] * signs.float()
+        flat[code['selected']] = r
     return v
 
 if __name__ == "__main__":
