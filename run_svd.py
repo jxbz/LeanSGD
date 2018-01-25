@@ -1,17 +1,18 @@
 import os
 
-epochs = 3
-layers = 10
-cmd = ('mpirun -n 4 -hostfile hosts --map-by ppr:1:node '
-       'python train.py --layers={layers} --epochs={epochs} '
-       '--compress={compress} --svd_rank={svd_rank} --svd_rescale={rescale}')
+epochs = 0
+layers = 94
+cmd = ('mpirun -n {n_workers} -hostfile hosts --map-by ppr:1:node '
+       'python train.py --layers={layers} --epochs={epochs} ')
 
-for svd_rank in [0, 1, 2, 4]:
-    for compress in [1, 0]:
-        for rescale in [0, 1]:
-            if (not compress) and (rescale or svd_rank):
-                continue
-            run = cmd.format(layers=layers, epochs=epochs, compress=compress,
-                             svd_rank=svd_rank, rescale=rescale)
-            print(run)
-            os.system(run)
+args = ['--compress=1 --svd_rank=0 --svd_rescale=1',
+        '--qsgd=1',
+        '--compress=0']
+for n_workers in [1, 2, 4, 8, 16]:
+    for arg in args:
+        run = cmd + arg
+        run = run.format(layers=layers, epochs=epochs, n_workers=n_workers)
+        print(run)
+        os.system(run)
+
+# 1 worker: tSVD

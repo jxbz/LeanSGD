@@ -34,7 +34,7 @@ import svd_comms
 import qsgd
 
 today_datetime = datetime.now().isoformat()[:10]
-today = '2017-12-19'
+today = '2018-01-25'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -326,6 +326,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if args.use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
+        if i > 10:
+            break
         if i > 50e3 / 1024:
             break
         print(i)
