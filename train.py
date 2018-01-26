@@ -34,7 +34,7 @@ import svd_comms
 import qsgd
 
 today_datetime = datetime.now().isoformat()[:10]
-today = '2018-01-25'
+today = '2018-01-26'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -244,7 +244,8 @@ def main():
 
     names = [n for n, p in model.named_parameters()]
     assert len(names) == len(set(names))
-    optimizer = MPI_PS(model.named_parameters(), model.parameters(), args.lr, encode_kwargs=encode_kwargs, names=names,
+    optimizer = MPI_PS(model.named_parameters(), model.parameters(), args.lr,
+                       encode_kwargs=encode_kwargs, names=names,
                        use_mpi=args.use_mpi, cuda=args.use_cuda, **coding)
 
     data = []

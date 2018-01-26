@@ -35,7 +35,7 @@ def _sample_svd(s, rank=0):
     return sampled_idx, torch.Tensor(sample_probs)
 
 
-def encode(grad, compress=True, svd_rank=0, random_sample=True, **kwargs):
+def encode(grad, compress=True, svd_rank=0, random_sample=True):
     # move to CPU; torch's SVD is 5x faster on CPU
     if not compress:
         size = list(grad.size())
