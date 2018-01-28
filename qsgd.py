@@ -4,16 +4,15 @@ from scipy import stats
 import torch
 import time
 
-# TODO: pass flag (qsgd/terngrad) and clip_factor into kwargs or figure out a better way
+
 def encode(v, scheme='qsgd', **kwargs):
     w = v.view(-1).numpy()
     if scheme == 'qsgd':
         norm = torch.norm(v)
     elif scheme == 'terngrad':
-        # max(abs(v)):
         norm = np.linalg.norm(w, ord=np.inf)
-        limit = grad_clip_limit(v, clip_factor=2.5)
-        v = np.clip(v, -limit, limit)
+        limit = grad_clip_limit(w, clip_factor=2.5)
+        w = np.clip(w, -limit, limit)
 
     signs = np.sign(w).astype('int') #.int()
     probs = np.abs(w) / norm
@@ -34,8 +33,8 @@ def encode(v, scheme='qsgd', **kwargs):
 
 
 def decode(code, cuda=False, **kwargs):
-    if 'norm' in kwargs.keys():
-        code['norm'] = kwargs['norm']
+    if 'max_norm' in kwargs.keys():
+        code['norm'] = kwargs['max_norm']
 
     v = np.zeros(code['size'])
     signs = np.array(code['signs'], dtype='int8')
@@ -51,17 +50,15 @@ def decode(code, cuda=False, **kwargs):
     return v
 
 
-def pre_decode(codes, clip_factor=2.5):
+def pre_decode(codes):
     scalars = [code['norm'] for code in codes]
-    return {'norm': max(scalars)}
+    return {'max_norm': max(scalars)}
 
 
 def grad_clip_limit(grad, clip_factor=2.5):
     """ Get the scalers."""
-    if grad is None:
-        return None
-    if(clip_factor > 1.0e-5):
-        return clip_factor*np.std(grad.view(-1).numpy())
+    if clip_factor > 1.0e-5:
+        return clip_factor * np.std(grad.flat[:])
     return np.max(np.abs(grad.flat[:]))
 
 
@@ -69,8 +66,6 @@ if __name__ == "__main__":
     n = 50
     x = torch.rand(n)
     for scheme in ['terngrad', 'qsgd']:
-        # scheme can take value of "terngrad" or "qsgd"
-        print(scheme)
         repeats = int(10e3)
         codes = [encode(x, scheme=scheme) for _ in range(repeats)]
 
@@ -86,5 +81,5 @@ if __name__ == "__main__":
         if scheme == 'qsgd':
             assert avg['len(signs)'] <= np.sqrt(n)
         rel_error = torch.norm(avg['y'] - x) / torch.norm(x)
-        print(rel_error)
-        assert rel_error < 0.2
+        print(scheme, rel_error)
+        assert rel_error < 0.25
