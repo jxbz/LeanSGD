@@ -34,7 +34,7 @@ def decode(code, cuda=False):
     selected = np.array(code['selected'], dtype='int16')
     #  selected = torch.LongTensor(selected)
 
-    if len(code['selected']) > 0:
+    if len(selected) > 0:
         v.flat[selected] = code['norm'] * signs
     v = torch.Tensor(v)
     if cuda:
@@ -56,4 +56,5 @@ if __name__ == "__main__":
     assert avg['norm(y)**2'] <= np.sqrt(n) * torch.norm(x)**2
     assert avg['len(signs)'] <= np.sqrt(n)
     rel_error = torch.norm(avg['y'] - x) / torch.norm(x)
+    print(rel_error)
     assert rel_error < 0.2

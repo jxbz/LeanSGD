@@ -40,9 +40,6 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True):
     if not compress:
         size = list(grad.size())
         return {'grad': grad, 'encode': False}#, {}
-    t = [time.time()]
-    #  grad = grad.cpu()
-    t += [time.time()]
 
     orig_size = list(grad.size())
     ndims = len(grad.size())
@@ -52,20 +49,15 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True):
         size = list(grad.size())
         ndims = len(size)
         reshaped_flag = True
-    t += [time.time()]
-    data = {'reshape_time': t[-1] - t[-2], 'cpu_time': t[1] - t[0]}
 
-    data.update({'random_sample_time': 0, 'svd_time': 0})
     if ndims == 2:
-        t += [time.time()]
         u, s, v = torch.svd(grad, some=True)
-        t += [time.time()]
         if random_sample:
             i, probs = _sample_svd(s, rank=svd_rank)
             i = torch.LongTensor(i)
-            if s.is_cuda:
-                i = i.cuda()
-                probs = probs.cuda()
+            #  if s.is_cuda:
+                #  i = i.cuda()
+                #  probs = probs.cuda()
             u = u[:, i]
             s = s[i] / probs
             v = v[:, i]
@@ -73,14 +65,11 @@ def encode(grad, compress=True, svd_rank=0, random_sample=True):
             u = u[:, :svd_rank]
             s = s[:svd_rank]
             v = v[:, :svd_rank]
-        t += [time.time()]
-        data.update({'random_sample_time': t[-1] - t[-2],
-                     'svd_time': t[-2] - t[-3]})
 
         return {'u': u, 's': s, 'v': v, 'orig_size': orig_size,
                'reshaped': reshaped_flag, 'encode': True,
-               'rank': svd_rank}#, data
-    return {'grad': grad, 'encode': False}#, data
+               'rank': svd_rank}
+    return {'grad': grad, 'encode': False}
 
 
 def decode(encode_output, cuda=False):
@@ -89,12 +78,14 @@ def decode(encode_output, cuda=False):
     encode = encode_output.get('encode', False)
     if not encode:
         grad = encode_output['grad']
+        grad = torch.Tensor(grad)
         if cuda:
             grad = grad.cuda()
         return grad
 
     u, s, v = (encode_output[key] for key in ['u', 's', 'v'])
-    grad_approx = u @ torch.diag(s) @ v.t()
+    grad_approx = u @ np.diag(s) @ v.T
+    grad_approx = torch.Tensor(grad_approx)
     if encode_output.get('reshaped', False):
         grad_approx = grad_approx.view(encode_output['orig_size'])
     if cuda:
