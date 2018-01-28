@@ -14,7 +14,7 @@ def encode(v, **kwargs):
     mask = stats.bernoulli.rvs(probs).astype('bool')
     idx = np.arange(len(w))
 
-    selected = idx[mask].astype('int16')
+    selected = idx[mask].astype('uint32')
     signs = signs[mask].astype('int8')
     signs = ((signs + 1) / 2).astype('bool')
 
