@@ -1,7 +1,8 @@
 from functools import reduce
 import numpy as np
+import numpy.linalg as LA
 from scipy import stats
-import torch
+#  import torch
 import time
 from .coding import Coding
 
@@ -10,11 +11,12 @@ class QSGD(Coding):
 
     def __init__(self, *args, scheme='qsgd', **kwargs):
         self.scheme = scheme
+        super().__init__(*args, **kwargs)
 
     def encode(self, v, **kwargs):
-        w = v.view(-1).numpy()
+        w = v.flat[:]
         if self.scheme == 'qsgd':
-            norm = torch.norm(v)
+            norm = LA.norm(v)
         elif self.scheme == 'terngrad':
             norm = np.linalg.norm(w, ord=np.inf)
             limit = grad_clip_limit(w, clip_factor=2.5)
@@ -29,7 +31,7 @@ class QSGD(Coding):
         signs = signs[mask].astype('int8')
         signs = ((signs + 1) / 2).astype('bool')
 
-        code = {'signs': signs, 'size': v.size(), 'selected': selected,
+        code = {'signs': signs, 'shape': v.shape, 'selected': selected,
                 'norm': norm}
 
         if kwargs.pop('timings', False):
@@ -41,7 +43,7 @@ class QSGD(Coding):
         if self.scheme == 'terngrad' and len(codes) > 0:
             code['norm'] = self._get_max_norm(codes)
 
-        v = np.zeros(code['size'])
+        v = np.zeros(code['shape'])
         signs = np.array(code['signs'], dtype='int8')
         signs = signs*2 - 1
         selected = np.array(code['selected'], dtype='int16')
@@ -49,9 +51,6 @@ class QSGD(Coding):
 
         if len(selected) > 0:
             v.flat[selected] = code['norm'] * signs
-        v = torch.Tensor(v)
-        if cuda:
-            v = v.cuda()
         return v
 
     def _get_max_norm(self, codes):
