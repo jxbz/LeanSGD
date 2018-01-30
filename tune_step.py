@@ -2,23 +2,21 @@ import os
 import sys
 import pickle
 import subprocess
+
 import numpy as np
-from distributed import Client, LocalCluster
-import dask
-import distributed
 import pandas as pd
-from mpi4py import MPI
-from multiprocessing import Pool
-from scipy.optimize import curve_fit
+
+import distributed
+from distributed import Client, get_client, secede, rejoin, Future
+
 from pprint import pprint
-from distributed import worker_client
-from distributed import get_client, secede, rejoin
 
 
 def _find_lowest_loss(lines):
     losses_str = filter(lambda line: 'min_train_loss' in line, lines)
     losses = map(lambda line: {'loss': float(line.split(' ')[1]),
                                'step': int(line.split(' ')[2])}, losses_str)
+    #  import ipdb as pdb; pdb.set_trace()
     df = pd.DataFrame(list(losses)).groupby(by='step').mean()
     avg_loss = df.to_dict()['loss']
 
@@ -28,125 +26,85 @@ def _find_lowest_loss(lines):
 
 
 def loss(stepsize, cmd=''):
-    #  return (stepsize - 0.1)**2
+    #  return (stepsize - 20.001)**2
     #  run = cmd + ''
     run = cmd.format(lr=stepsize)
     print("About to run this command:")
     print(run)
+    #  try:
+    out = subprocess.check_output('which mpirun'.split(' '))
     try:
         out = subprocess.check_output(run.split(' '))
-    except:
-        print(run)
+    except subprocess.CalledProcessError as e:
+        print(e.cmd)
+        print(e.stdout)
+        print(e.output)
         raise
     print("Done with check_output")
     lines = out.split(b'\n')
     lines = [l.decode() for l in lines]
-    try:
-        _loss = _find_lowest_loss(lines)
-    except Exception:
-        _loss = np.inf
+    #  try:
+    _loss = _find_lowest_loss(lines)
+    #  except Exception:
+        #  _loss = np.inf
     print('stepsize={:0.4f}, loss={}'.format(stepsize, _loss))
     return _loss
 
 
-def find_step_size(f, space, k=0, history=None, dask=True,
-                   get_client_=False, ip=None,
-                   **kwargs):
-    if history is None:
-        history = {}
-    if get_client_:
-        print(f"Trying get_client()")
-        jobs = []
-        params = []
-        client = get_client()
-        for param in space:
-            if param not in history:
-                jobs += [client.submit(f, param, **kwargs)]
-                params += [param]
-        secede()
-        output = client.gather(jobs)
-        rejoin()
-        for _k, _v in zip(params, output):
-            history[_k] = _v
-    else:
-        for param in space:
-            if param not in history:
-                history[param] = f(param, **kwargs)
+def find_step(step_loss, cmd=''):
+    client = get_client()
+    for step in step_loss:
+        if step_loss[step] is None:
+            step_loss[step] = client.submit(loss, step, cmd=cmd)
+    secede()
+    for step, value in step_loss.items():
+        if isinstance(value, Future):
+            step_loss[step] = value.result()
+    rejoin()
 
-    optimal = min(history, key=history.get)
-    if k == 3:
-        return optimal, history
-    rand = np.random.rand() / 4
-    factor = 10 / (k + 1)
-    new_space = np.logspace(np.log10(optimal/factor) - rand,
-                            np.log10(optimal*factor) + rand, num=4)
-    return find_step_size(f, new_space, k=k + 1, history=history,
-                          get_client_=get_client_, **kwargs)
+    step_w_min_loss = min(step_loss, key=step_loss.get)
 
+    if step_w_min_loss == min(step_loss):
+        step_loss[step_w_min_loss / 2] = None
+        return find_step(step_loss, cmd=cmd)
+    if step_w_min_loss == max(step_loss):
+        step_loss[step_w_min_loss * 2] = None
+        return find_step(step_loss, cmd=cmd)
 
-def test_find_step_size():
-    space = [10**i for i in [-2, -1, 0]]
-    rel_error = []
-    log_rel_error = []
-    for m in np.logspace(-3, 1.0, num=1000):
-        for f in [lambda x: (x-m)**2, lambda x: np.exp(((x-m)/30)**2)]:
-            x_hat, _ = find_step_size(f, space)
-            diff = np.abs(m - x_hat) / m
-            rel_error += [diff]
-            log_rel_error += [np.log10(np.abs(m - x_hat) / m)]
-    for diffs in [rel_error, log_rel_error]:
-        avg_diff = sum(diffs) / len(diffs)
-        print("avg =", avg_diff)
-        print("median =", np.median(diffs))
-        print("max =", max(diffs))
-        print("min =", min(diffs))
-        print('-' * 30)
-    assert np.median(rel_error) < 0.15
-    assert sum(rel_error) / len(rel_error) < 0.15
-    assert max(rel_error) < 0.4
-    return x_hat, _
+    return step_w_min_loss, step_loss, cmd
 
 
 if __name__ == "__main__":
-    #  opt, hist = test_find_step_size()
-    #  pprint(sorted(list(hist.keys())))
-    #  print(len(hist))
-    #  sys.exit(0)
-    ip = '172.31.13.19:8786'
-    client = Client(ip)
-    #  client = Client()
-    #  client = None
-    #  args = ['--compress=0', '--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1']
-    #  args = [arg + f' --use_mpi={use_mpi}'
-            #  for use_mpi in [0, 1] for arg in args]
+    layers = 10
+    n_workers = 1
+    widen_factor = 1
+    home = '/home/ec2-user'
+    pre = (f'mpirun -n {n_workers} -hostfile {home}/WideResNet-pytorch/hosts '
+           f'--map-by ppr:1:node')
+    pre = 'mpirun -n 1'
+    cmd = (f'{home}/anaconda3/bin/python '
+           f'{home}/WideResNet-pytorch/train.py --layers={layers} '
+           '--epochs=0 --num_workers=1 '
+           '--nesterov=0 --weight-decay=0 --momentum=0 '
+           f'--widen-factor={widen_factor}')
+    cmd = pre + ' ' + cmd
     args = ['--qsgd=1', '--compress=1 --svd_rank=0 --svd_rescale=1',
             '--compress=0']
-    args += [f'--compress=1 --svd_rank={rank} --svd_rescale={rescale}'
-             for rank in [2, 4, 8] for rescale in [0, 1]]
-    #  args = ['--compress=1 --svd_rank=0 --svd_rescale=1']
+    #  args += [f'--compress=1 --svd_rank={rank} --svd_rescale={rescale}'
+    #  for rank in [2, 4, 8]]
+    cmds = [cmd + ' ' + arg + ' --lr={lr}' for arg in args]
+    cmds = [cmds[0]]
 
-    print(f"running len(args) = {len(args)} jobs (each jobs spawns more adaptively)")
+    step_loss = {0.1: None, 0.2: None, 0.05: None}
 
-    layers = 94
-    n_worker = 1
-    home = '/home/ec2-user'
-    pre = 'mpirun -n 1'
-    cmd = (f'sudo {home}/anaconda3/bin/python '
-           f'{home}/WideResNet-pytorch/train.py --layers={layers} '
-           '--epochs=4 --num_workers=1 '
-           '--nesterov=0 --weight-decay=0 --momentum=0')
-    cmds = [pre + ' ' + cmd + ' ' + arg for arg in args]
-    cmds = [cmd + ' --lr={lr}' for cmd in cmds]
-    print(cmds)
-    #  cmds = []
-    jobs = []
-    for run in cmds:
-        print(run)
-        kwargs = {'cmd': run, 'get_client_': True}
+    client = Client()
+    futures = []
+    for cmd in cmds:
+        futures += [client.submit(find_step, step_loss, cmd=cmd)]
 
-        space = [10**i for i in [-2, -1, 0]]
-        jobs += [client.submit(find_step_size, loss, space, **kwargs)]
-        #  jobs += [client.submit(loss, 0.1, **kwargs)]
-        #  x_hat, history = find_step_size(macc, space, client=client, **kwargs)
-    output = client.gather(jobs)
-    print("Done with all jobs")
+    results = client.gather(futures)
+    results = [{'step': step, 'history': history, 'cmd': cmd}
+               for step, history, cmd in results]
+    pprint(results)
+    with open('tune_step.pkl', 'wb') as f:
+        pickle.dump(results, f)
