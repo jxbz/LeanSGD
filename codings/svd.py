@@ -13,8 +13,11 @@ def _resize_to_2d(x):
     If x.shape = (a, b, *c), assumed that each one of (a, b) pairs has relevant information in c.
     """
     shape = x.shape
+    if x.ndim == 1:
+        n = x.shape[0]
+        return x.reshape((n//2, 2))
     if all([s == 1 for s in shape[2:]]):
-        return x.flat[shape[0], shape[1]]
+        return x.reshape((shape[0], shape[1]))
     # each of (a, b) has related features
     x = x.reshape((shape[0], shape[1], -1))
     # stack those related features into a tall matrix
@@ -54,7 +57,7 @@ class SVD(Coding):
         orig_size = list(grad.shape)
         ndims = grad.ndim
         reshaped_flag = False
-        if ndims > 2:
+        if ndims != 2:
             grad = _resize_to_2d(grad)
             shape = list(grad.shape)
             ndims = len(shape)

@@ -33,7 +33,7 @@ from pytorch_ps_mpi import MPI_PS
 import codings
 
 today_datetime = datetime.now().isoformat()[:10]
-today = '2018-01-26'
+today = '2018-01-29'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -85,6 +85,8 @@ parser.add_argument('--svd_rank', default=0, help='Boolean int: compress or not'
 parser.add_argument('--device', default=0, help='Which GPU to use', type=int)
 parser.add_argument('--qsgd', default=0, type=int, help='Use QSGD?')
 parser.add_argument('--use_mpi', default=1, type=int, help='Use MPI?')
+parser.add_argument('--code', type=str, default='sgd')
+parser.add_argument('--scheme', type=str, default='qsgd')
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
@@ -230,15 +232,23 @@ def main():
     #  from distributed_opt import MiniBatchSGD
     #  import torch.distributed as dist
     #  rank = np.random.choice('gloo')
+
+    # TODO: pass kwargs to code
     print('initing MiniBatchSGD')
     print(list(model.parameters())[6].view(-1)[:3])
-    if not args.qsgd:
-        encode_kwargs = {'random_sample': args.svd_rescale,
-                         'svd_rank': args.svd_rank, 'compress': args.compress}
-        code = codings.svd.SVD()
+    if args.code == 'sgd':
+        code = codings.svd.SVD(compress=False)
+    elif args.code == 'svd':
+        code = codings.svd.SVD(random_sample=args.svd_rescale, rank=args.svd_rank,
+                               compress=args.compress)
+    elif args.code == 'qsgd':
+        code = codings.qsgd.QSGD(scheme='qsgd')
+    elif args.code == 'terngrad':
+        code = codings.qsgd.QSGD(scheme='terngrad')
+    elif args.code == 'qsvd':
+        code = codings.qsvd.QSVD(scheme=args.scheme)
     else:
-        encode_kwargs = {}
-        code = codings.qsgd.QSGD()
+        raise ValueError('args.code not recognized')
 
     names = [n for n, p in model.named_parameters()]
     assert len(names) == len(set(names))
@@ -263,11 +273,14 @@ def main():
         train_data += [dict(datum, **vars(args)) for datum in train_d]
 
         # evaluate on validation set
+        print("Validating on test")
         datum = validate(val_loader, model, criterion, epoch)
+        print("Validating on train")
         train_datum = validate(train_loader, model, criterion, epoch)
+        #  train_datum = {'acc_train': 0.1, 'loss_train': 2.3}
         data += [{'train_time': train_time,
-                  'whole_train_acc': train_datum['acc_train'],
-                  'whole_train_loss': train_datum['loss_train'],
+                  'whole_train_acc': train_datum['acc_test'],
+                  'whole_train_loss': train_datum['loss_test'],
                   'epoch': epoch + 1, **vars(args), **datum}]
         if epoch > 0:
             data[-1]['epoch_train_time'] = data[-1]['train_time'] - data[-2]['train_time']
@@ -282,8 +295,9 @@ def main():
         train_df = pd.DataFrame(train_data)
         if True:
             time.sleep(1)
-            print('\n\nmin_train_loss', train_datum['loss_train'],
-                  train_datum['acc_train'], '\n\n')
+            # Yes loss_test IS on train data. (look at what validate returns)
+            print('\n\nmin_train_loss', train_datum['loss_test'],
+                  optimizer.steps, '\n\n')
             time.sleep(1)
         ids = [str(getattr(args, key)) for key in
                ['layers', 'lr', 'batch_size', 'compress', 'seed', 'num_workers',
@@ -328,7 +342,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
             break
         if i > 50e3 / 1024:
             break
-        print(i)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
 
