@@ -8,6 +8,7 @@ import codings
 def test_qsgd_and_terngrad():
     n = 50
     x = np.random.rand(n)
+    x = torch.Tensor(x)
     code = codings.QSGD()
     codes = [codings.QSGD(scheme=scheme) for scheme in ['terngrad', 'qsgd']]
     for code in codes:
@@ -15,7 +16,7 @@ def test_qsgd_and_terngrad():
         codes = [code.encode(x, scheme=code.scheme) for _ in range(repeats)]
         code.codes = codes
 
-        approxs = [code.decode(x) for x in codes]
+        approxs = [code.decode(x).cpu().numpy() for x in codes]
 
         data = map(lambda arg: {'y': arg[1], 'norm(y)**2': LA.norm(arg[1])**2,
                                 'len(signs)': len(arg[0]['signs'])},
@@ -34,12 +35,13 @@ def test_svd(n=64*32, r=9):
     u, s, vT = np.linalg.svd(x, full_matrices=False)
     s = np.exp(-1 * np.linspace(0, 5, num=len(s)))
     x = u @ np.diag(s) @ vT
+    x = torch.Tensor(x)
 
     code = codings.SVD(rank=0, compress=True, random_sample=True)
     repeats = int(10e3)
 
     codes = [code.encode(x) for _ in range(repeats)]
-    approxs = [code.decode(x) for x in codes]
+    approxs = [code.decode(x).cpu().numpy() for x in codes]
     norms = [LA.norm(g, ord='fro')**2 for g in approxs]
     est = {'mean': np.mean(approxs, axis=0), 'norm**2': np.mean(norms)}
     rel_error = LA.norm(est['mean'] - x) / LA.norm(x)
@@ -51,15 +53,18 @@ def test_svd(n=64*32, r=9):
 def test_qsvd(n=64*32, r=9):
     n = 50
     x = np.random.rand(n, n//10)
+    x = torch.Tensor(x)
 
     for scheme in ['terngrad', 'qsgd']:
         qsvd = codings.QSVD(scheme=scheme)
         repeats = int(1000)
         codes = [qsvd.encode(x, scheme=scheme) for _ in range(repeats)]
-        approxs = [qsvd.decode(code, codes=codes) for code in codes]
+        approxs = [qsvd.decode(code, codes=codes).cpu().numpy()
+                   for code in codes]
 
         est = np.mean(approxs, axis=0)
-        rel_error = LA.norm(est - x) / LA.norm(x)
+        rel_error = LA.norm(est - x.cpu().numpy())
+        rel_error /= LA.norm(x.cpu().numpy())
         print('qsvd', scheme, rel_error)
         assert rel_error < 0.25
 

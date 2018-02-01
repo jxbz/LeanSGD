@@ -4,6 +4,7 @@ import numpy.linalg as LA
 import warnings
 import sys
 import time
+import torch
 
 from .coding import Coding
 
@@ -50,6 +51,7 @@ class SVD(Coding):
 
     def encode(self, grad):
         # move to CPU; SVD is 5x faster on CPU (at least in torch)
+        grad = grad.cpu().numpy()
         if not self.compress:
             shape = list(grad.shape)
             return {'grad': grad, 'encode': False}#, {}
@@ -82,15 +84,21 @@ class SVD(Coding):
                     'rank': self.svd_rank}
         return {'grad': grad, 'encode': False}
 
-    def decode(self, encode_output):
+    def decode(self, encode_output, cuda=False):
         if isinstance(encode_output, tuple) and len(encode_output) == 1:
             encode_output = encode_output[0]
         encode = encode_output.get('encode', False)
         if not encode:
-            return encode_output['grad']
+            grad = encode_output['grad']
+            grad = torch.Tensor(grad)
+            if cuda:
+                grad = grad.cuda(async=True)
+            return grad
 
-        u, s, vT = (encode_output[key] for key in ['u', 's', 'vT'])
-        grad_approx = u @ np.diag(s) @ vT
+        u, s, vT = (torch.Tensor(encode_output[key]) for key in ['u', 's', 'vT'])
+        if cuda:
+            u, s, vT = u.cuda(async=True), s.cuda(async=True), vT.cuda(async=True)
+        grad_approx = u @ torch.diag(s) @ vT
         if encode_output.get('reshaped', False):
-            grad_approx = grad_approx.reshape(encode_output['orig_size'])
+            grad_approx = grad_approx.view(encode_output['orig_size'])
         return grad_approx

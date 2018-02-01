@@ -2,7 +2,7 @@ from functools import reduce
 import numpy as np
 import numpy.linalg as LA
 from scipy import stats
-#  import torch
+import torch
 import time
 from .coding import Coding
 
@@ -14,7 +14,13 @@ class QSGD(Coding):
         super().__init__(*args, **kwargs)
 
     def encode(self, v, **kwargs):
-        w = v.flat[:]
+        if isinstance(v, (torch.Tensor, torch.cuda.FloatTensor)):
+            w = v.cpu().numpy().flat[:]
+        elif isinstance(v, np.ndarray):
+            w = v.flat[:]
+        else:
+            raise ValueError("Object passed to encode not ndarray or torch.Tensor")
+
         if self.scheme == 'qsgd':
             norm = LA.norm(v)
         elif self.scheme == 'terngrad':
@@ -24,6 +30,7 @@ class QSGD(Coding):
 
         signs = np.sign(w).astype('int')
         probs = np.abs(w) / norm
+        #  print(probs.shape, probs.mean(), probs.min(), probs.max())
         mask = stats.bernoulli.rvs(probs).astype('bool')
         idx = np.arange(len(w))
 
@@ -51,6 +58,9 @@ class QSGD(Coding):
 
         if len(selected) > 0:
             v.flat[selected] = code['norm'] * signs
+        v = torch.Tensor(v)
+        if cuda:
+            v = v.cuda()
         return v
 
     def _get_max_norm(self, codes):
