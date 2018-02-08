@@ -1,0 +1,3 @@
+[submodule "pytorch_ps_mpi"]
+	path = pytorch_ps_mpi
+	url = https://github.com/stsievert/pytorch_ps_mpi.git
