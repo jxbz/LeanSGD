@@ -29,17 +29,13 @@ from datetime import datetime
 
 from wideresnet import WideResNet
 
-from pytorch_ps_mpi import MPI_PS
+from pytorch_ps_mpi import MPI_PS, Adam, SGD
 import codings
 
 today_datetime = datetime.now().isoformat()[:10]
-today = '2018-01-29'
+today = '2018-02-05-step-v4'
 if today != today_datetime:
     warn('Is today set correctly?')
-
-# used for logging to TensorBoard
-if False:
-    from tensorboard_logger import configure, log_value
 
 use_cuda = torch.cuda.is_available()
 parser = argparse.ArgumentParser(description='PyTorch WideResNet Training')
@@ -239,6 +235,7 @@ def main():
     if args.code == 'sgd':
         code = codings.svd.SVD(compress=False)
     elif args.code == 'svd':
+        print("train.py, svd_rank =", args.svd_rank)
         code = codings.svd.SVD(random_sample=args.svd_rescale, rank=args.svd_rank,
                                compress=args.compress)
     elif args.code == 'qsgd':
@@ -252,9 +249,12 @@ def main():
 
     names = [n for n, p in model.named_parameters()]
     assert len(names) == len(set(names))
-    optimizer = MPI_PS(model.named_parameters(), model.parameters(), args.lr,
-                       code=code,
-                       use_mpi=args.use_mpi, cuda=args.use_cuda)
+    #  optimizer = MPI_PS(model.named_parameters(), model.parameters(), args.lr,
+                       #  code=code, optim='adam',
+                       #  use_mpi=args.use_mpi, cuda=args.use_cuda)
+    optimizer = SGD(model.named_parameters(), model.parameters(), args.lr,
+                    code=code, optim='sgd',
+                    use_mpi=args.use_mpi, cuda=args.use_cuda)
 
     data = []
     train_data = []
@@ -273,17 +273,19 @@ def main():
         train_data += [dict(datum, **vars(args)) for datum in train_d]
 
         # evaluate on validation set
-        print("Validating on test")
+        if epoch >= args.epochs:
+            train_datum = validate(train_loader, model, criterion, epoch)
+        else:
+            train_datum = {'acc_test': np.nan, 'loss_test': np.nan}
         datum = validate(val_loader, model, criterion, epoch)
-        print("Validating on train")
-        train_datum = validate(train_loader, model, criterion, epoch)
         #  train_datum = {'acc_train': 0.1, 'loss_train': 2.3}
         data += [{'train_time': train_time,
                   'whole_train_acc': train_datum['acc_test'],
                   'whole_train_loss': train_datum['loss_test'],
                   'epoch': epoch + 1, **vars(args), **datum}]
         if epoch > 0:
-            data[-1]['epoch_train_time'] = data[-1]['train_time'] - data[-2]['train_time']
+            if len(data) > 1:
+                data[-1]['epoch_train_time'] = data[-1]['train_time'] - data[-2]['train_time']
             for key in train_data[-1]:
                 values = [datum[key] for i, datum in enumerate(train_data)]
                 if 'time' in key:
@@ -301,7 +303,8 @@ def main():
             time.sleep(1)
         ids = [str(getattr(args, key)) for key in
                ['layers', 'lr', 'batch_size', 'compress', 'seed', 'num_workers',
-                'svd_rank', 'svd_rescale', 'use_mpi', 'qsgd', 'world_size', 'rank']]
+                'svd_rank', 'svd_rescale', 'use_mpi', 'qsgd', 'world_size',
+                'rank', 'code', 'scheme']]
         _write_csv(df, id=f'-'.join(ids))
         _write_csv(train_df, id=f'-'.join(ids) + '_train')
         pprint({k: v for k, v in data[-1].items()
@@ -319,7 +322,7 @@ def main():
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
         }, is_best)
-    print('Best accuracy: ', best_prec1)
+        print('Best accuracy: ', best_prec1)
 
 def train(train_loader, model, criterion, optimizer, epoch):
     """Train for one epoch on the training set"""
@@ -333,21 +336,25 @@ def train(train_loader, model, criterion, optimizer, epoch):
     end = time.time()
     pbar = tqdm(enumerate(train_loader), leave=True)
     comm_data = []
-    start = time.time()
     for i, (input, target) in pbar:
+        start = time.time()
+        loop_start = time.time()
         if args.use_cuda:
             target = target.cuda(**cuda_kwargs)
             input = input.cuda(**cuda_kwargs)
-        if i > 3:
-            break
         if i > 50e3 / 1024:
             break
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
+        loss_datum = {'example_to_gpu': time.time() - start}
 
         # compute output
+        start = time.time()
         output = model(input_var)
         loss = criterion(output, target_var)
+        loss_datum['grad_forward_pass'] = time.time() - start
+        if loss.data.cpu().numpy().min() > 100:
+            break
 
         # measure accuracy and record loss
         prec1 = accuracy(output.data, target, topk=(1,))[0]
@@ -355,22 +362,23 @@ def train(train_loader, model, criterion, optimizer, epoch):
         top1.update(prec1[0], input.size(0))
 
         # compute gradient and do SGD step
-        optimizer.zero_grad()
         loss_start = time.time()
+        optimizer.zero_grad()
         loss.backward()
-        loss_datum = {'grad_compute_time': time.time() - loss_start}
+        loss_datum['grad_compute_time'] = time.time() - loss_start
 
         r = optimizer.step()
         if r is not None:
             _, comm_datum = r
         else:
             comm_datum = {}
+        # measure elapsed time
+        loss_datum['step_time'] = time.time() - loop_start
         pprint({**comm_datum, **loss_datum})
         comm_data += [{'loss_train_avg': losses.avg, 'loss_train': losses.val,
                        'acc_train_avg': top1.avg,   'acc_train': top1.val,
                        **comm_datum, **loss_datum}]
 
-        # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
 
