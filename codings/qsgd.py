@@ -30,9 +30,11 @@ class QSGD(Coding):
 
         signs = np.sign(w).astype('int')
         probs = np.abs(w) / norm
-        #  print(probs.shape, probs.mean(), probs.min(), probs.max())
-        mask = stats.bernoulli.rvs(probs).astype('bool')
-        idx = np.arange(len(w))
+        #  mask = stats.bernoulli.rvs(probs).astype('bool')  # rvs is not thread-safe
+        mask = np.random.rand(len(probs)) < probs
+        # generate 0/1 random variable with mean prob
+        # or, 0 if x < prob and 1 if x >= prob
+        idx = np.arange(len(w), dtype='uint32')
 
         selected = idx[mask].astype('uint32')
         signs = signs[mask].astype('int8')
@@ -46,18 +48,36 @@ class QSGD(Coding):
             return code, data
         return code
 
-    def decode(self, code, cuda=False, codes=[], **kwargs):
+    def decode(self, code, cuda=False, implementation='numpy', codes=[], **kwargs):
+        """
+        Decode the coding.
+
+        ## NumPy
+         'comm_wait': 0.0728750228881836,
+         'decode_time': 0.1349341869354248,
+         'example_to_gpu': 0.0006515979766845703,
+         'grad_compute_time': 0.5815503597259521,
+         'grad_forward_pass': 0.23496603965759277,
+         'grad_variance_increase': 31.754316389320049,
+         'iallgather_prepare_time': 0.017401456832885742,
+         'isend_time': 0.029105424880981445,
+
+        ## PT GPU
+        """
         if self.scheme == 'terngrad' and len(codes) > 0:
             code['norm'] = self._get_max_norm(codes)
 
-        v = np.zeros(code['shape'])
-        signs = np.array(code['signs'], dtype='int8')
-        signs = signs*2 - 1
-        selected = np.array(code['selected'], dtype='int16')
-        #  selected = torch.LongTensor(selected)
+        if implementation == 'numpy':
+            v = np.zeros(code['shape'])
+            signs = np.array(code['signs'], dtype='int8')
+            signs = signs*2 - 1
+            selected = np.array(code['selected'], dtype='int16')
+            #  selected = torch.LongTensor(selected)
 
-        if len(selected) > 0:
-            v.flat[selected] = code['norm'] * signs
+            if len(selected) > 0:
+                v.flat[selected] = code['norm'] * signs
+        else:
+            raise ValueError('Whoops, implementation')
         v = torch.Tensor(v)
         if cuda:
             v = v.cuda()

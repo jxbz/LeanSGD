@@ -42,14 +42,14 @@ def _sample_svd(s, rank=0):
 
 
 class SVD(Coding):
-    def __init__(self, *args, compress=True, svd_rank=0, random_sample=True,
+    def __init__(self, *args, compress=True, rank=0, random_sample=True,
                  **kwargs):
-        self.svd_rank = svd_rank
+        self.svd_rank = rank
         self.random_sample = random_sample
         self.compress = compress
         super().__init__(*args, **kwargs)
 
-    def encode(self, grad):
+    def encode(self, grad, **kwargs):
         # move to CPU; SVD is 5x faster on CPU (at least in torch)
         grad = grad.cpu().numpy()
         if not self.compress:
@@ -84,7 +84,7 @@ class SVD(Coding):
                     'rank': self.svd_rank}
         return {'grad': grad, 'encode': False}
 
-    def decode(self, encode_output, cuda=False):
+    def decode(self, encode_output, cuda=False, **kwargs):
         if isinstance(encode_output, tuple) and len(encode_output) == 1:
             encode_output = encode_output[0]
         encode = encode_output.get('encode', False)
@@ -95,9 +95,27 @@ class SVD(Coding):
                 grad = grad.cuda(async=True)
             return grad
 
-        u, s, vT = (torch.Tensor(encode_output[key]) for key in ['u', 's', 'vT'])
+        u, s, vT = (encode_output[key] for key in ['u', 's', 'vT'])
+        grad = u @ np.diag(s) @ vT
+        grad = torch.Tensor(grad)
+        grad = grad.view(encode_output['orig_size'])
         if cuda:
-            u, s, vT = u.cuda(async=True), s.cuda(async=True), vT.cuda(async=True)
+            grad = grad.cuda(async=True)
+        return grad
+
+        if isinstance(u, np.ndarray):
+            u = torch.Tensor(u)
+        if isinstance(s, np.ndarray):
+            s = torch.Tensor(s)
+        if isinstance(vT, np.ndarray):
+            vT = torch.Tensor(vT)
+        if cuda:
+            u = u.contiguous().cuda(async=True)
+            s = s.contiguous().cuda(async=True)
+            vT = vT.contiguous().cuda(async=True)
+            #  u = u.cuda(async=True)
+            #  s = s.cuda(async=True)
+            #  vT = vT.cuda(async=True)
         grad_approx = u @ torch.diag(s) @ vT
         if encode_output.get('reshaped', False):
             grad_approx = grad_approx.view(encode_output['orig_size'])
