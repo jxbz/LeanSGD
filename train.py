@@ -33,7 +33,7 @@ from pytorch_ps_mpi import MPI_PS, Adam, SGD
 import codings
 
 today_datetime = datetime.now().isoformat()[:10]
-today = '2018-02-05-step-v4'
+today = '2018-02-27'
 if today != today_datetime:
     warn('Is today set correctly?')
 
@@ -276,7 +276,7 @@ def main():
         if epoch >= args.epochs:
             train_datum = validate(train_loader, model, criterion, epoch)
         else:
-            train_datum = {'acc_test': np.nan, 'loss_test': np.nan}
+            train_datum = {'acc_test': np.inf, 'loss_test': np.inf}
         datum = validate(val_loader, model, criterion, epoch)
         #  train_datum = {'acc_train': 0.1, 'loss_train': 2.3}
         data += [{'train_time': train_time,
