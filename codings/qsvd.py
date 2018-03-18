@@ -7,13 +7,14 @@ import codings
 
 
 class QSVD(codings.Coding):
-    def __init__(self, scheme='qsgd', *args, **kwargs):
+    def __init__(self, scheme='qsgd', rank=0, *args, **kwargs):
         self.scheme = scheme
+        self.rank = rank
         if scheme not in ['qsgd', 'terngrad']:
             raise ValueError(f'Illegal value for scheme: {scheme} not in '
                              '["qsgd", "terngrad"]')
         self.qsgd = codings.QSGD(scheme=scheme)
-        self.svd = codings.SVD()
+        self.svd = codings.SVD(rank=self.rank)
         super().__init__(self, *args, **kwargs)
 
     def encode(self, grad, **kwargs):

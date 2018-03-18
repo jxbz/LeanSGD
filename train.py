@@ -243,7 +243,7 @@ def main():
     elif args.code == 'terngrad':
         code = codings.qsgd.QSGD(scheme='terngrad')
     elif args.code == 'qsvd':
-        code = codings.qsvd.QSVD(scheme=args.scheme)
+        code = codings.qsvd.QSVD(scheme=args.scheme, rank=args.svd_rank)
     else:
         raise ValueError('args.code not recognized')
 
