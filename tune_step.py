@@ -73,11 +73,9 @@ def find_step(step_loss, cmd=''):
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 if __name__ == "__main__":
-    #  args = ['--code=qsgd', '--code=terngrad',
-    args = ['--code=svd --svd_rank=3 --svd_rescale=1',
-            '--code=svd --svd_rank=6 --svd_rescale=1']
-            #  '--code=qsvd --scheme=terngrad',
-            #  '--code=qsvd --scheme=qsgd']
+    args = ['--code=svd --svd_rank=1 --svd_rescale=1',
+            '--code=qsvd --scheme=qsgd --svd_rank=1',
+            '--code=qsvd --scheme=terngrad --svd_rank=1']
 
     divs = {'--code=qsgd': [1, 2, 4], '--code=terngrad': [1, 2, 4],
             '--code=svd --svd_rank=3 --svd_rescale=1': [1, 2, 4],
