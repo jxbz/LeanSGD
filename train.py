@@ -83,6 +83,7 @@ parser.add_argument('--qsgd', default=0, type=int, help='Use QSGD?')
 parser.add_argument('--use_mpi', default=1, type=int, help='Use MPI?')
 parser.add_argument('--code', type=str, default='sgd')
 parser.add_argument('--scheme', type=str, default='qsgd')
+parser.add_argument('--compress-level', type=int, default=3)
 
 parser.set_defaults(augment=True)
 args = parser.parse_args()
@@ -254,7 +255,7 @@ def main():
                        #  use_mpi=args.use_mpi, cuda=args.use_cuda)
     optimizer = SGD(model.named_parameters(), model.parameters(), args.lr,
                     code=code, optim='sgd',
-                    use_mpi=args.use_mpi, cuda=args.use_cuda)
+                    use_mpi=args.use_mpi, cuda=args.use_cuda, compress_level=args.compress_level)
 
     data = []
     train_data = []
