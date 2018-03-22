@@ -39,7 +39,8 @@ run.py
     this, we code the gradients asynchrously with gradient computation. We then
     wait for all codings to finish before sending them.
   * `mpi_comms.py`: This is the script that serializes the gradients and sends
-    them.
+    them. In this file, there's a class `Iallgather`. That's what we use (and it's
+    named after the MPI primitive that does what we want).
 * `codings`: The package with different coding schemes. The base coding class
   is in `coding.py`.
 * `train.py`: The main training script. `run.py` calls this with an `os.system`
