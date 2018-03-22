@@ -19,6 +19,32 @@ python train.py --compress=0  # use normal SGD with the param server
 
 Note that extra arguments are added to each of these commands.
 
+# File structure
+```
+pytorch_ps_mpi/
+    ps.py
+    mpi_comms.py
+codings/
+    coding.py
+    ...
+train.py
+run.py
+```
+
+* `pytorch_ps_mpi`: The package that manages distributed training. It is a
+  separate Git repository at https://github.com/stsievert/pytorch_ps_mpi (and
+  is unfortunately named).
+  * `ps.py`: The main file in this package, which holds the different
+    optimizers. These are slightly modified from `torch.optim` optimizers. In
+    this, we code the gradients asynchrously with gradient computation. We then
+    wait for all codings to finish before sending them.
+  * `mpi_comms.py`: This is the script that serializes the gradients and sends
+    them.
+* `codings`: The package with different coding schemes. The base coding class
+  is in `coding.py`.
+* `train.py`: The main training script. `run.py` calls this with an `os.system`
+  call.
+
 # Distributed training
 ``` shell
 mpirun -n 3 -hostfile hosts --map-by ppr:1:node python train.py
@@ -38,38 +64,6 @@ And with 100 layers:
 
 How will this change as the number of workers increase?
 
-## Async comms
-``` python
-def encode(grad):
-    u, s, v = svd(grad)
-    return concat(h, u, s, v, w)
-
-def decode(encode_output):
-    h, w = encode_output[...]
-    u = encode_out[...]
-    s = encode_out[...]
-    v = encode_out[...]
-    grad = u @ s @ v
-
-def _decode(recv):
-    grads = [decode(recv[i]) for i in range(len(recv))]
-    return sum(grads)
-
-def _encode(model):
-    for model in named_params:
-        send = encode(param)
-        recv = np.array([send] * workers)
-        req = Ialltoall(send, recv)
-    return recvs
-
-def step():
-    self.svd_rank = known
-
-    recvs = _encode(model)
-    for param, recv in training_loop:
-        req.wait()
-        p.grad.data = _decode(recv)
-```
 
 # Acknowledgement
 - [densenet-pytorch](https://github.com/andreasveit/densenet-pytorch)
